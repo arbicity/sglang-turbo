@@ -1230,12 +1230,26 @@ class Qwen3_5ForCausalLM(nn.Module):
 
         # Embedding layer
         if self.pp_group.is_first_rank:
-            self.embed_tokens = VocabParallelEmbedding(
-                config.vocab_size,
-                config.hidden_size,
-                org_num_embeddings=config.vocab_size,
-                enable_tp=not is_dp_attention_enabled(),
-            )
+            # The NEXTN draft (is_nextn) never loads its own embed_tokens — the
+            # checkpoint has no mtp.embed_tokens and the weight is always rebound
+            # to the target's via set_embed_and_head(). Materialising a real
+            # vocab*hidden table here is pure transient waste that OOMs tight
+            # GPUs during the progressive draft load; build it on meta instead.
+            if is_nextn:
+                with torch.device("meta"):
+                    self.embed_tokens = VocabParallelEmbedding(
+                        config.vocab_size,
+                        config.hidden_size,
+                        org_num_embeddings=config.vocab_size,
+                        enable_tp=not is_dp_attention_enabled(),
+                    )
+            else:
+                self.embed_tokens = VocabParallelEmbedding(
+                    config.vocab_size,
+                    config.hidden_size,
+                    org_num_embeddings=config.vocab_size,
+                    enable_tp=not is_dp_attention_enabled(),
+                )
         else:
             self.embed_tokens = PPMissingLayer()
 

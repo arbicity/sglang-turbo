@@ -103,12 +103,21 @@ class Qwen3_5ForCausalLMMTP(nn.Module):
             if config.tie_word_embeddings:
                 self.lm_head = self.model.embed_tokens
             else:
-                self.lm_head = ParallelLMHead(
-                    config.vocab_size,
-                    config.hidden_size,
-                    quant_config=quant_config,
-                    prefix=add_prefix("lm_head", prefix),
-                )
+                # The NEXTN draft never loads its own lm_head from the
+                # checkpoint (load_weights only keeps "mtp.*" params) and its
+                # weight is always replaced by the target's shared head via
+                # set_embed_and_head(). Materialising a real ~vocab*hidden head
+                # here is pure transient waste — invisible on 80GB cards but the
+                # straw that OOMs a 27B on tight (2x24GB) GPUs during the
+                # progressive weight load. Build it on meta (zero bytes); the
+                # real shared tensor is bound in set_embed_and_head().
+                with torch.device("meta"):
+                    self.lm_head = ParallelLMHead(
+                        config.vocab_size,
+                        config.hidden_size,
+                        quant_config=quant_config,
+                        prefix=add_prefix("lm_head", prefix),
+                    )
 
         self.logits_processor = LogitsProcessor(config)
 
