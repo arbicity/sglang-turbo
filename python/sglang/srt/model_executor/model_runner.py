@@ -517,6 +517,7 @@ class ModelRunner:
             ps=self.ps,
             pp_group=self.pp_group,
             model=self.model,
+            model_runner=self,
             model_config=self.model_config,
             server_args=self.server_args,
             kv_cache_dtype=self.kv_cache_dtype,
@@ -1080,6 +1081,24 @@ class ModelRunner:
             )
 
     def configure_kv_cache_dtype(self):
+        # Plugin KV-cache dtypes (see :mod:`sglang.srt.plugins.kv_cache`)
+        # bind a name → torch storage dtype mapping. If the user
+        # selected a registered plugin name, use that storage dtype and
+        # skip the built-in dispatch (now the kv_cache_dtype helper).
+        from sglang.srt.plugins import kv_cache as _plugin_kv
+        from sglang.srt.utils import log_info_on_rank0
+
+        if _plugin_kv.is_registered(self.server_args.kv_cache_dtype):
+            self.kv_cache_dtype = _plugin_kv.get_torch_dtype(
+                self.server_args.kv_cache_dtype
+            )
+            log_info_on_rank0(
+                logger,
+                f"Using plugin KV cache dtype: {self.server_args.kv_cache_dtype} "
+                f"(storage={self.kv_cache_dtype})",
+            )
+            return
+
         spec_algorithm = getattr(self, "spec_algorithm", None)
         resolved_kv_cache_dtype, self.kv_cache_dtype = (
             kv_cache_dtype.configure_kv_cache_dtype(

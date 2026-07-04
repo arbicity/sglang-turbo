@@ -159,6 +159,12 @@ class KVCacheConfigurator:
     ps: ParallelState
     pp_group: Any
     model: Any
+    # Back-reference to the owning ModelRunner. Plugin KV-cache backends
+    # (:mod:`sglang.srt.plugins.kv_cache`) receive this as their
+    # ``pool_factory``/``cell_size_factory`` argument, exactly as they did
+    # when pool construction lived on the ModelRunner (pre-v0.5.16, via the
+    # now-removed ModelRunnerKVCacheMixin).
+    model_runner: Any
     model_config: ModelConfig
     server_args: ServerArgs
     kv_cache_dtype: torch.dtype
@@ -774,6 +780,20 @@ class KVCacheConfigurator:
         mha_pool_class = (
             PageMajorMHATokenToKVPool if enable_page_major else MHATokenToKVPool
         )
+
+        # Plugin KV-cache dtypes (see :mod:`sglang.srt.plugins.kv_cache`)
+        # provide a pool_factory that fully owns pool construction. If the
+        # user selected a registered plugin name, build the pool from the
+        # factory and skip the built-in dispatch below. The allocator wiring
+        # in _build_token_to_kv_pool_allocator still runs afterward. The
+        # factory receives the owning ModelRunner (the seam's contract),
+        # not this configurator.
+        from sglang.srt.plugins import kv_cache as _plugin_kv
+
+        if _plugin_kv.is_registered(self.server_args.kv_cache_dtype):
+            return _plugin_kv.build_pool(
+                self.server_args.kv_cache_dtype, self.model_runner
+            )
 
         if is_dsv4_model:
             token_to_kv_pool = self._build_dsv4_kv_pool(

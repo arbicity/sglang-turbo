@@ -170,6 +170,26 @@ class DefaultPoolConfigurator(MemoryPoolConfigurator):
 
     def _compute_cell_size(self, kvc: KVCacheConfigurator, num_layers: int) -> int:
         """Compute per-token KV cache cost in bytes. Subclasses can override."""
+        # Plugin KV-cache backends (e.g. compressed-KV) cannot be sized
+        # from the storage dtype alone — a uint8 slab packs sub-byte
+        # quantized K/V plus norm metadata, so element_size(uint8)=1 both
+        # under-counts (4-bit) and over-counts (8-bit + norms). Consult
+        # the plugin's cell_size_factory when present so the token budget
+        # reflects the real packed footprint. The plugin name lives on
+        # server_args (kv_cache_dtype has already been resolved to the
+        # torch storage dtype by configure_kv_cache_dtype). The factory
+        # receives the owning ModelRunner (the seam's contract), reached
+        # here via the configurator's back-reference.
+        from sglang.srt.plugins import kv_cache as _plugin_kv
+
+        _plugin_name = kvc.server_args.kv_cache_dtype
+        if _plugin_kv.is_registered(_plugin_name) and _plugin_kv.has_cell_size(
+            _plugin_name
+        ):
+            return _plugin_kv.get_cell_size(
+                _plugin_name, kvc.model_runner, num_layers
+            )
+
         # args to config cell size
         model_config = kvc.model_config
         kv_cache_dtype = kvc.kv_cache_dtype
