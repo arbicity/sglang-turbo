@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from sglang.srt.layers.attention.attention_registry import (
     ATTENTION_BACKENDS,
+    PLUGIN_ATTENTION_BACKENDS,
     register_attention_backend,
 )
 
@@ -46,6 +47,9 @@ def register(name: str, factory: Callable[[Any], "AttentionBackend"]) -> None:
         factory: ``(runner) -> AttentionBackend`` callable.
     """
     ATTENTION_BACKENDS[name] = factory
+    # Mark as plugin-provided so guards that special-case the built-in
+    # backend set (hybrid-GDN Blackwell guard) accept it.
+    PLUGIN_ATTENTION_BACKENDS.add(name)
 
 
 def is_registered(name: str) -> bool:
