@@ -65,6 +65,28 @@ class DraftBackendFactory:
             "dsv4": self._create_dsv4_decode_backend,
         }
 
+        # Out-of-tree plugin attention backends supply their multi-step
+        # draft-decode wrapper via the plugin registry (symmetric with the
+        # draft-extend consultation in create_draft_extend_backend below):
+        # ``plugins.attention.register(name, factory, multi_step_factory=...)``.
+        # Consult it before the built-in map's fail-loud gate so EAGLE/NEXTN
+        # works with a plugin backend without a hardcoded entry here.
+        from sglang.srt.plugins import attention as _plugin_attn
+
+        backend_type = (
+            self.draft_attn_backend
+            if self.draft_attn_backend
+            else self.server_args.decode_attention_backend
+        )
+        if backend_type is None:
+            backend_type = self.server_args.attention_backend
+        if backend_type not in backend_map:
+            multi_step_factory = _plugin_attn.get_multi_step_factory(backend_type)
+            if multi_step_factory is not None:
+                return multi_step_factory(
+                    self.draft_model_runner, self.topk, self.speculative_num_steps
+                )
+
         return self._create_backend(
             "decode_attention_backend",
             backend_map,
