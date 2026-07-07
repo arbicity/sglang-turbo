@@ -180,6 +180,10 @@ class DFlashWorkerV2(BaseSpecWorker):
         self._warned_sampling_fallback = False
         self._logged_first_verify = False
 
+        # TQKV seam: the draft-worker builder (build_draft_tp_worker) resets a
+        # plugin/tqkv target KV codec to "auto" so the DFlash drafter — which
+        # runs a standard bf16 attention backend that cannot decode the
+        # compressed pool — does not inherit it and read garbage drafts.
         bundle = build_draft_tp_worker(
             server_args=server_args,
             gpu_id=gpu_id,
