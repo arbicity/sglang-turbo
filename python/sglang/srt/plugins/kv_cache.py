@@ -25,7 +25,7 @@ and ``_init_pools`` constructs the pool by calling ``_build_my_pool(runner)``
 instead of the built-in pool selection.
 
 Symmetric with :mod:`sglang.srt.plugins.attention` — both registries
-together let an out-of-tree compressed-KV backend (e.g. tqkv) plug in
+together let an out-of-tree compressed-KV backend (e.g. tkv) plug in
 without runtime monkey-patches.
 """
 

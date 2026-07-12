@@ -88,7 +88,7 @@ def build_draft_tp_worker(
         attention_backend=draft_backend,
         context_length=target_model_config.context_len,
     )
-    # TQKV seam: a plugin KV codec (e.g. tqkv/turbo-attn) selected on the
+    # TKV seam: a plugin KV codec (e.g. tkv/turbo-attn) selected on the
     # target must NOT be inherited by the draft worker — the draft runs a
     # standard bf16 attention backend (draft_backend above) that cannot
     # decode the compressed pool, so inheriting it yields garbage drafts.

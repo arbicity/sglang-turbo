@@ -33,7 +33,7 @@ ATTENTION_BACKENDS = {}
 # (sglang.srt.plugins.attention.register). Tracked separately so guards
 # that special-case the built-in backend set -- e.g. the hybrid-GDN
 # Blackwell guard in attn_backend_wrapper -- can recognise a registered
-# plugin backend (e.g. tqkv's 'turbo-attn') as a valid full-attn backend.
+# plugin backend (e.g. tkv's 'turbo-attn') as a valid full-attn backend.
 PLUGIN_ATTENTION_BACKENDS: set = set()
 
 
@@ -343,7 +343,7 @@ def attn_backend_wrapper(runner: "ModelRunner", full_attn_backend: "AttentionBac
                 else:
                     allowed = {"triton", "trtllm_mha", "fa4"}
                 # Registered out-of-tree plugin attention backends (e.g.
-                # tqkv's 'turbo-attn') are accepted alongside the built-in
+                # tkv's 'turbo-attn') are accepted alongside the built-in
                 # Blackwell whitelist so hybrid-GDN (Qwen3.5) serving with a
                 # plugin backend passes this guard.
                 allowed = allowed | PLUGIN_ATTENTION_BACKENDS
