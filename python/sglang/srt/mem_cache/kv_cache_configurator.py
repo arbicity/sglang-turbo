@@ -791,6 +791,8 @@ class KVCacheConfigurator:
         from sglang.srt.plugins import kv_cache as _plugin_kv
 
         if _plugin_kv.is_registered(self.server_args.kv_cache_dtype):
+            # v0.5.16 sets model_runner.max_total_num_tokens only after configure() returns; the plugin factory runs here inside configure and reads it off the runner, so surface the computed size now.
+            self.model_runner.max_total_num_tokens = sizes.max_total_num_tokens
             return _plugin_kv.build_pool(
                 self.server_args.kv_cache_dtype, self.model_runner
             )
