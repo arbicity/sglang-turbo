@@ -1089,14 +1089,27 @@ class ModelRunner:
         from sglang.srt.utils import log_info_on_rank0
 
         if _plugin_kv.is_registered(self.server_args.kv_cache_dtype):
-            self.kv_cache_dtype = _plugin_kv.get_torch_dtype(
-                self.server_args.kv_cache_dtype
-            )
-            log_info_on_rank0(
-                logger,
-                f"Using plugin KV cache dtype: {self.server_args.kv_cache_dtype} "
-                f"(storage={self.kv_cache_dtype})",
-            )
+            if self.is_draft_worker:
+                # A draft worker runs a standard attention backend that cannot
+                # read the target's plugin-compressed KV pool, so give it the
+                # model compute dtype. Mirrors upstream's fa4-draft override in
+                # mem_cache/kv_cache_dtype.configure_kv_cache_dtype.
+                self.kv_cache_dtype = getattr(self, "dtype", torch.bfloat16)
+                log_info_on_rank0(
+                    logger,
+                    f"Draft worker: plugin KV dtype "
+                    f"{self.server_args.kv_cache_dtype!r} not inheritable; "
+                    f"using model compute dtype {self.kv_cache_dtype}.",
+                )
+            else:
+                self.kv_cache_dtype = _plugin_kv.get_torch_dtype(
+                    self.server_args.kv_cache_dtype
+                )
+                log_info_on_rank0(
+                    logger,
+                    f"Using plugin KV cache dtype: {self.server_args.kv_cache_dtype} "
+                    f"(storage={self.kv_cache_dtype})",
+                )
             return
 
         spec_algorithm = getattr(self, "spec_algorithm", None)

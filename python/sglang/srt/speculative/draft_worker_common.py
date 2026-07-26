@@ -80,7 +80,8 @@ def build_draft_tp_worker(
     # fa4-draft KV dtype override in configure_kv_cache_dtype), so nulling it
     # would silently skip those paths. context_length keeps the draft aligned
     # with the target.
-    override_kwargs = dict(
+    draft_server_args.override(
+        "draft_worker.build",
         skip_tokenizer_init=True,
         speculative_draft_attention_backend=draft_backend,
         prefill_attention_backend=None,
@@ -88,18 +89,6 @@ def build_draft_tp_worker(
         attention_backend=draft_backend,
         context_length=target_model_config.context_len,
     )
-    # TKV seam: a plugin KV codec (e.g. tkv/turbo-attn) selected on the
-    # target must NOT be inherited by the draft worker — the draft runs a
-    # standard bf16 attention backend (draft_backend above) that cannot
-    # decode the compressed pool, so inheriting it yields garbage drafts.
-    # Reset the draft KV dtype to the engine default only when the inherited
-    # dtype is a registered plugin codec; non-plugin dtypes keep upstream's
-    # per-backend draft KV handling (e.g. the fa4-draft override) untouched.
-    from sglang.srt.plugins import kv_cache as _plugin_kv
-
-    if _plugin_kv.is_registered(draft_server_args.kv_cache_dtype):
-        override_kwargs["kv_cache_dtype"] = "auto"
-    draft_server_args.override("draft_worker.build", **override_kwargs)
 
     saved_server_args = get_server_args()
     try:
