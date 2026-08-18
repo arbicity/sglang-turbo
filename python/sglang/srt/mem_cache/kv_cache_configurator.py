@@ -178,6 +178,9 @@ class KVCacheConfigurator:
     ps: ParallelState
     pp_group: Any
     model: Any
+    # Back-reference to the owning ModelRunner: plugin KV-cache factories take
+    # the runner, not this configurator.
+    model_runner: Any
     model_config: ModelConfig
     server_args: ServerArgs
     kv_cache_dtype: torch.dtype
@@ -852,6 +855,17 @@ class KVCacheConfigurator:
         mha_pool_class = (
             PageMajorMHATokenToKVPool if enable_page_major else MHATokenToKVPool
         )
+
+        from sglang.srt.plugins import kv_cache as _plugin_kv
+
+        if _plugin_kv.is_registered(self.server_args.kv_cache_dtype):
+            # ModelRunner.max_total_num_tokens is only assigned after configure()
+            # returns; the plugin factory runs inside configure() and reads it
+            # off the runner, so surface the computed size now.
+            self.model_runner.max_total_num_tokens = sizes.max_total_num_tokens
+            return _plugin_kv.build_pool(
+                self.server_args.kv_cache_dtype, self.model_runner
+            )
 
         if is_dsv4_model:
             token_to_kv_pool = self._build_dsv4_kv_pool(

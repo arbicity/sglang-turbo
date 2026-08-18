@@ -30,6 +30,11 @@ if TYPE_CHECKING:
 
 ATTENTION_BACKENDS = {}
 
+# Names registered through sglang.srt.plugins.attention.register, tracked
+# separately so guards that whitelist the built-in backend set can recognise a
+# registered plugin backend.
+PLUGIN_ATTENTION_BACKENDS: set = set()
+
 
 def register_attention_backend(name):
     def decorator(fn):
@@ -398,6 +403,7 @@ def attn_backend_wrapper(runner: "ModelRunner", full_attn_backend: "AttentionBac
                     allowed = {"triton", "trtllm_mha", "flashinfer"}
                 else:
                     allowed = {"triton", "trtllm_mha", "fa4"}
+                allowed = allowed | PLUGIN_ATTENTION_BACKENDS
                 attn_be = runner.server_args.attention_backend
                 prefill_be = runner.server_args.prefill_attention_backend
                 decode_be = runner.server_args.decode_attention_backend
