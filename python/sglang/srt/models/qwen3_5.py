@@ -14,6 +14,7 @@
 # ==============================================================================
 """Inference-only Qwen3.5 model and Qwen3.5 MoE model compatible with HuggingFace weights."""
 
+import contextlib
 import logging
 from functools import lru_cache
 from typing import Iterable, Optional, Set, Tuple, Union
@@ -1350,12 +1351,17 @@ class Qwen3_5ForCausalLM(nn.Module):
 
         # Embedding layer
         if self.pp_group.is_first_rank:
-            self.embed_tokens = VocabParallelEmbedding(
-                config.vocab_size,
-                config.hidden_size,
-                org_num_embeddings=config.vocab_size,
-                enable_tp=not is_dp_attention_enabled(),
-            )
+            # The NEXTN draft never loads its own embed_tokens (no
+            # mtp.embed_tokens in the checkpoint) -- set_embed_and_head() rebinds
+            # it to the target's. Build it on meta to avoid the transient
+            # vocab*hidden allocation.
+            with torch.device("meta") if is_nextn else contextlib.nullcontext():
+                self.embed_tokens = VocabParallelEmbedding(
+                    config.vocab_size,
+                    config.hidden_size,
+                    org_num_embeddings=config.vocab_size,
+                    enable_tp=not is_dp_attention_enabled(),
+                )
         else:
             self.embed_tokens = PPMissingLayer()
 
