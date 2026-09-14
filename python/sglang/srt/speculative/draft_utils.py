@@ -33,6 +33,11 @@ class DraftBackendFactory:
         seed_dsa_topk_from_draft_extend: bool = False,
     ):
         self.draft_model_runner = draft_model_runner
+        # The draft runner's server args. ``create_decode_backend`` reads
+        # ``self.server_args.decode_attention_backend`` / ``attention_backend``
+        # when no draft-specific backend is configured; the constructor takes the
+        # runner, not the args, so this must be carried explicitly.
+        self.server_args = draft_model_runner.server_args
         self.topk = topk
         self.speculative_num_steps = speculative_num_steps
         self.seed_dsa_topk_from_draft_extend = seed_dsa_topk_from_draft_extend
