@@ -579,6 +579,7 @@ class ModelRunner:
             ps=self.ps,
             pp_group=self.pp_group,
             model=self.model,
+            model_runner=self,
             model_config=self.model_config,
             server_args=self.server_args,
             kv_cache_dtype=self.kv_cache_dtype,
@@ -1312,6 +1313,35 @@ class ModelRunner:
         return load_format
 
     def configure_kv_cache_dtype(self):
+        # A plugin KV-cache dtype (sglang.srt.plugins.kv_cache) binds its own
+        # name -> torch storage dtype and owns the dispatch below.
+        from sglang.srt.plugins import kv_cache as _plugin_kv
+        from sglang.srt.utils import log_info_on_rank0
+
+        if _plugin_kv.is_registered(self.server_args.kv_cache_dtype):
+            if self.is_draft_worker:
+                # A draft worker runs a standard attention backend that cannot
+                # read the target's plugin-compressed KV pool.
+                self.kv_cache_dtype = getattr(self, "dtype", torch.bfloat16)
+                self.kv_cache_dtype_str = "auto"
+                log_info_on_rank0(
+                    logger,
+                    f"Draft worker: plugin KV dtype "
+                    f"{self.server_args.kv_cache_dtype!r} not inheritable; "
+                    f"using model compute dtype {self.kv_cache_dtype}.",
+                )
+            else:
+                self.kv_cache_dtype = _plugin_kv.get_torch_dtype(
+                    self.server_args.kv_cache_dtype
+                )
+                self.kv_cache_dtype_str = self.server_args.kv_cache_dtype
+                log_info_on_rank0(
+                    logger,
+                    f"Using plugin KV cache dtype: {self.server_args.kv_cache_dtype} "
+                    f"(storage={self.kv_cache_dtype})",
+                )
+            return
+
         spec_algorithm = getattr(self, "spec_algorithm", None)
         resolved_kv_cache_dtype, self.kv_cache_dtype = (
             kv_cache_dtype.configure_kv_cache_dtype(
