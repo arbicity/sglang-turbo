@@ -976,6 +976,15 @@ class KVCacheConfigurator:
             # returns; the plugin factory runs inside configure() and reads it
             # off the runner, so surface the computed size now.
             self.model_runner.max_total_num_tokens = sizes.max_total_num_tokens
+            if self.is_hybrid_swa:
+                # A hybrid sliding-window model gets one pool per attention
+                # kind: the factory sizes each from its own token count.
+                self.model_runner.full_max_total_num_tokens = (
+                    sizes.full_max_total_num_tokens
+                )
+                self.model_runner.swa_max_total_num_tokens = (
+                    sizes.swa_max_total_num_tokens
+                )
             return _plugin_kv.build_pool(
                 self.server_args.kv_cache_dtype, self.model_runner
             )

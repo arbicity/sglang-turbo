@@ -489,6 +489,35 @@ class HybridSWAPoolConfigurator(MemoryPoolConfigurator):
                 * (model_config.swa_head_dim + model_config.swa_v_head_dim)
             ) // scale_block_size
 
+        # Bytes per token of all full-attention layers and of all SWA layers.
+        self._full_layers_bytes = self._full_per_token * self._full_layers_num
+        self._swa_layers_bytes = self._swa_per_token * self._swa_layers_num
+
+        # A compressed-KV plugin prices each sub-pool from the layers it holds:
+        # its slab is not ``element_size(kv_cache_dtype)`` bytes per element.
+        from sglang.srt.plugins import kv_cache as _plugin_kv
+
+        _plugin_name = kvc.server_args.kv_cache_dtype
+        if _plugin_kv.is_registered(_plugin_name) and _plugin_kv.has_cell_size(
+            _plugin_name
+        ):
+            full_ids = list(model_config.full_attention_layer_ids)
+            swa_ids = list(model_config.swa_attention_layer_ids)
+            self._full_layers_bytes = (
+                _plugin_kv.get_cell_size(
+                    _plugin_name, kvc.model_runner, len(full_ids), layer_ids=full_ids
+                )
+                if full_ids
+                else 0
+            )
+            self._swa_layers_bytes = _plugin_kv.get_cell_size(
+                _plugin_name, kvc.model_runner, len(swa_ids), layer_ids=swa_ids
+            )
+            self._full_per_token = self._full_layers_bytes / max(
+                self._full_layers_num, 1
+            )
+            self._swa_per_token = self._swa_layers_bytes / self._swa_layers_num
+
         # EAGLE/STANDALONE draft KV pool inherits max_total tokens with its
         # full-attn layers; budget into the full term. A banded MTP depth
         # (Inkling mtp_local_layer_ids) instead allocates an swa-geometry ring
@@ -529,19 +558,17 @@ class HybridSWAPoolConfigurator(MemoryPoolConfigurator):
         # with no ratio factor applied.
         if self._full_layers_num == 0:
             self._cell_size = (
-                self._swa_per_token * self._swa_layers_num
+                self._swa_layers_bytes
                 + self._full_per_token * self._draft_full_layers_num
                 + self._swa_per_token * self._draft_swa_full_layers_num
                 + self._draft_cell_size
             )
         else:
             self._cell_size = (
-                self._full_per_token
-                * (self._full_layers_num + self._draft_full_layers_num)
+                self._full_layers_bytes
+                + self._full_per_token * self._draft_full_layers_num
                 + self._swa_per_token * self._draft_swa_full_layers_num
-                + self._swa_full_tokens_ratio
-                * self._swa_per_token
-                * self._swa_layers_num
+                + self._swa_full_tokens_ratio * self._swa_layers_bytes
                 + self._draft_cell_size
             )
 
@@ -677,9 +704,10 @@ class SWAChunkCapPoolConfigurator(HybridSWAPoolConfigurator):
     ) -> MemoryPoolConfig:
         # SWA pool sized tightly from the cap; the rest of the budget goes to full.
         swa_tokens = ceil_align(self._swa_cap, page_size)
-        fixed_swa_bytes = swa_tokens * self._swa_per_token * self._swa_layers_num
+        fixed_swa_bytes = swa_tokens * self._swa_layers_bytes
         full_cell_size = (
-            self._full_per_token * (self._full_layers_num + self._draft_full_layers_num)
+            self._full_layers_bytes
+            + self._full_per_token * self._draft_full_layers_num
             + self._swa_per_token * self._draft_swa_full_layers_num
         )
         full_tokens = (
