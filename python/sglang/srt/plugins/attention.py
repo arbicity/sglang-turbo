@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from sglang.srt.layers.attention.attention_registry import (
     ATTENTION_BACKENDS,
+    PAGED_TREE_SPEC_PLUGIN_BACKENDS,
     PLUGIN_ATTENTION_BACKENDS,
     register_attention_backend,
 )
@@ -33,6 +34,8 @@ def register(
     name: str,
     factory: Callable[[Any], AttentionBackend],
     multi_step_factory: Callable[[Any, int, int], Any] | None = None,
+    *,
+    paged_tree_speculation: bool = False,
 ) -> None:
     """Register an attention backend factory under ``name``.
 
@@ -47,6 +50,13 @@ def register(
             ``init_forward_metadata*`` / ``init_cuda_graph_state`` fan-out
             surface the draft CUDA graph runner drives. Omitting it keeps
             spec-decode gated off for this backend.
+        paged_tree_speculation: the backend reads a speculative tree's
+            draft at ``page_size > 1``: each branch's page-aligned pages with
+            the prefix's last partial page duplicated into them
+            (``duplicate_prefix_tail_to_draft_branches``). Without it,
+            ``--speculative-eagle-topk > 1`` with ``--page-size > 1`` is
+            refused for this backend, as for every built-in one outside
+            flashinfer / fa3 / triton.
 
     Idempotent: re-registering the same ``name`` overrides the previous entry.
     """
@@ -54,6 +64,10 @@ def register(
     PLUGIN_ATTENTION_BACKENDS.add(name)
     if multi_step_factory is not None:
         MULTI_STEP_ATTENTION_BACKENDS[name] = multi_step_factory
+    if paged_tree_speculation:
+        PAGED_TREE_SPEC_PLUGIN_BACKENDS.add(name)
+    else:
+        PAGED_TREE_SPEC_PLUGIN_BACKENDS.discard(name)
 
 
 def is_registered(name: str) -> bool:

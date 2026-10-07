@@ -53,7 +53,10 @@ def register(
             assigned to ``runner.token_to_kv_pool``.
         paired_attention_backend: Optional name of the
             :mod:`sglang.srt.plugins.attention` backend this dtype is paired
-            with. When set, either flag alone implies the other.
+            with. Read back through :func:`get_paired_attention_backend` /
+            :func:`find_dtype_paired_with_backend` by a plugin's resolution
+            hook (``sglang.srt.arg_groups.resolution_hooks``) that defaults
+            either flag from the other.
         cell_size_factory: optional ``(runner, num_layers) -> int`` returning
             the per-token KV-cache cost in bytes summed across ``num_layers``
             effective attention layers (Mamba/recurrent layers excluded).
