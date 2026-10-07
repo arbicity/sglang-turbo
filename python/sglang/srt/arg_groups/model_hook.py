@@ -492,6 +492,13 @@ def handle_model_specific_adjustments(server_args: Any):
                 "intel_xpu",
                 "aiter",
             ]
+            # Seam: a plugin-registered backend declares its own sliding
+            # window and attention-sink support.
+            from sglang.srt.layers.attention.attention_registry import (
+                PLUGIN_ATTENTION_BACKENDS,
+            )
+
+            supported_backends += sorted(PLUGIN_ATTENTION_BACKENDS)
             prefill_attn_backend, decode_attn_backend = attention_backends_of(
                 resolved_view(server_args)
             )
@@ -611,6 +618,13 @@ def handle_model_specific_adjustments(server_args: Any):
             "intel_amx",
             "aiter",
         )
+        # Seam: a plugin-registered backend declares its own sliding window
+        # and KV-sharing support.
+        from sglang.srt.layers.attention.attention_registry import (
+            PLUGIN_ATTENTION_BACKENDS,
+        )
+
+        accepted_backends += tuple(sorted(PLUGIN_ATTENTION_BACKENDS))
         assert (
             prefill_backend in accepted_backends and decode_backend in accepted_backends
         ), (

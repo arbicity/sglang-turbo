@@ -45,6 +45,7 @@ from sglang.srt.runtime_context import (
     get_disagg,
     get_exec,
     get_memory,
+    get_model,
     get_parallel,
     get_schedule,
     get_spec,
@@ -277,6 +278,16 @@ class DefaultPoolConfigurator(MemoryPoolConfigurator):
 
     def _compute_cell_size(self, kvc: KVCacheConfigurator, num_layers: int) -> int:
         """Compute per-token KV cache cost in bytes."""
+        # A compressed-KV plugin cannot be sized from its storage dtype alone:
+        # a uint8 slab packs sub-byte K/V plus norm metadata.
+        from sglang.srt.plugins import kv_cache as _plugin_kv
+
+        _plugin_name = get_model().kv_cache_dtype
+        if _plugin_kv.is_registered(_plugin_name) and _plugin_kv.has_cell_size(
+            _plugin_name
+        ):
+            return _plugin_kv.get_cell_size(_plugin_name, kvc.model_runner, num_layers)
+
         # args to config cell size
         model_config = kvc.model_config
         kv_cache_dtype = kvc.kv_cache_dtype
@@ -639,6 +650,30 @@ class HybridSWAPoolConfigurator(MemoryPoolConfigurator):
                 model_config.get_swa_num_kv_heads(tp_size)
                 * (model_config.swa_head_dim + model_config.swa_v_head_dim)
             ) // scale_block_size
+
+        # A compressed-KV plugin prices each sub-pool from the layers it holds:
+        # its slab is not ``element_size(kv_cache_dtype)`` bytes per element.
+        # Every formula below reads the per-layer averages, so they stand in.
+        from sglang.srt.plugins import kv_cache as _plugin_kv
+
+        _plugin_name = get_model().kv_cache_dtype
+        if _plugin_kv.is_registered(_plugin_name) and _plugin_kv.has_cell_size(
+            _plugin_name
+        ):
+            full_ids = list(kvc.layer_info.full_attention_layer_ids or [])
+            swa_ids = list(kvc.layer_info.swa_attention_layer_ids)
+            full_bytes = (
+                _plugin_kv.get_cell_size(
+                    _plugin_name, kvc.model_runner, len(full_ids), layer_ids=full_ids
+                )
+                if full_ids
+                else 0
+            )
+            swa_bytes = _plugin_kv.get_cell_size(
+                _plugin_name, kvc.model_runner, len(swa_ids), layer_ids=swa_ids
+            )
+            self._full_per_token = full_bytes / max(self._full_layers_num, 1)
+            self._swa_per_token = swa_bytes / self._swa_layers_num
 
         # Draft KV tensors use full, SWA, or full-capacity SWA geometry.
         self._draft_full_layers_num = 0

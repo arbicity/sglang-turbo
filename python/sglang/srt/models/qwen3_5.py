@@ -14,6 +14,7 @@
 # ==============================================================================
 """Inference-only Qwen3.5 model and Qwen3.5 MoE model compatible with HuggingFace weights."""
 
+import contextlib
 import logging
 import os
 from functools import lru_cache
@@ -1669,7 +1670,16 @@ class Qwen3_5ForCausalLM(nn.Module):
         alt_stream = get_stream("alt") if _is_cuda or _hip_use_alt_stream else None
 
         # Embedding layer
-        self.embed_tokens = self._build_embed_tokens(config)
+        # A NEXTN draft on a single pipeline stage never keeps its own
+        # embed_tokens: set_embed_and_head() rebinds it to the target's. Build it
+        # on meta to avoid the transient vocab*hidden allocation. Under PP the
+        # draft may have to load its own copy (pp_draft_embedding), so it stays real.
+        with (
+            torch.device("meta")
+            if is_nextn and self.pp_group.world_size == 1
+            else contextlib.nullcontext()
+        ):
+            self.embed_tokens = self._build_embed_tokens(config)
 
         # Decoder layers
         def get_layer(idx: int, prefix: str):

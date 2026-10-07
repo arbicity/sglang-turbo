@@ -117,6 +117,21 @@ DETERMINISTIC_ATTENTION_BACKEND_CHOICES = [
     "triton",
 ]
 
+# --kv-cache-dtype choices, hoisted from fields/model.py so out-of-tree KV-cache
+# plugins (sglang.srt.plugins.kv_cache) can extend them with
+# add_kv_cache_dtype_choices(); the runtime dispatch for a plugin name lives in
+# that registry.
+KV_CACHE_DTYPE_CHOICES = [
+    "auto",
+    "fp8_e5m2",
+    "fp8_e4m3",
+    "mxfp8",
+    "bf16",
+    "bfloat16",
+    "nvfp4",
+    "fp4_mx_block16",
+]
+
 DISAGG_TRANSFER_BACKEND_CHOICES = [
     "mooncake",
     "nixl",
@@ -249,6 +264,10 @@ add_radix_supported_deterministic_attention_backend_choices = (
 # --- Transport ---
 
 add_disagg_transfer_backend_choices = DISAGG_TRANSFER_BACKEND_CHOICES.extend
+
+# --- KV cache ---
+
+add_kv_cache_dtype_choices = KV_CACHE_DTYPE_CHOICES.extend
 
 # --- Sampling and grammar ---
 

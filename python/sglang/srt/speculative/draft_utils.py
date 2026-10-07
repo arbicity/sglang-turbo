@@ -113,6 +113,19 @@ class DraftBackendFactory:
             "dsv4": self._create_dsv4_decode_backend,
         }
 
+        from sglang.srt.plugins import attention as _plugin_attn
+
+        # The split pair with the base-backend fallback already applied (the
+        # same read ``_create_backend`` makes); ServerArgs is no longer held here.
+        _, decode_backend = attention_backends()
+        backend_type = self.draft_attn_backend or decode_backend
+        if backend_type not in backend_map:
+            multi_step_factory = _plugin_attn.get_multi_step_factory(backend_type)
+            if multi_step_factory is not None:
+                return multi_step_factory(
+                    self.draft_model_runner, self.topk, self.speculative_num_steps
+                )
+
         return self._create_backend(
             "decode_attention_backend",
             backend_map,
@@ -149,11 +162,25 @@ class DraftBackendFactory:
             if get_spec().speculative_attention_mode == "decode"
             else "prefill_attention_backend"
         )
-        backend = self._create_backend(
-            backend_name,
-            backend_map,
-            "EAGLE is not supported in attention backend {backend_type}",
+        # A plugin attention backend serves draft extend by constructing the
+        # SAME backend on the draft model runner -- draft extend is a normal
+        # prefill through it.
+        from sglang.srt.plugins import attention as _plugin_attn
+
+        prefill_backend, decode_backend = attention_backends()
+        backend_type = self.draft_attn_backend or (
+            decode_backend if backend_name == "decode_attention_backend" else prefill_backend
         )
+        if backend_type not in backend_map and _plugin_attn.is_registered(backend_type):
+            backend = _plugin_attn.ATTENTION_BACKENDS[backend_type](
+                self.draft_model_runner
+            )
+        else:
+            backend = self._create_backend(
+                backend_name,
+                backend_map,
+                "EAGLE is not supported in attention backend {backend_type}",
+            )
         # A draft with conv layers of its own (Inkling) needs its sidecar here too.
         from sglang.srt.layers.attention.attention_registry import (
             attn_backend_wrapper_for_draft_extend,

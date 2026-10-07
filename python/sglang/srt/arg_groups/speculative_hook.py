@@ -1157,6 +1157,13 @@ def _handle_eagle_family(server_args: ServerArgs) -> None:
     # pass + per-branch expand pass with prefix-tail dup). Only these backends implement
     # it; flashmla / trtllm_mla can't express the per-branch tree, so reject.
     _PAGE_TREE_SPEC_BACKENDS = ("flashinfer", "fa3", "triton")
+    # Seam: a plugin backend that declared it reads that layout (plugins.attention
+    # register(..., paged_tree_speculation=True)) is accepted too.
+    from sglang.srt.layers.attention.attention_registry import (
+        PAGED_TREE_SPEC_PLUGIN_BACKENDS,
+    )
+
+    _PAGE_TREE_SPEC_BACKENDS += tuple(sorted(PAGED_TREE_SPEC_PLUGIN_BACKENDS))
     view = resolved_view(server_args)
     if (
         cfg.speculative_eagle_topk > 1

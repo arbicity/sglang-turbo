@@ -147,12 +147,16 @@ class Qwen3_5ForCausalLMMTP(nn.Module):
             if config.tie_word_embeddings:
                 self.lm_head = self.model.embed_tokens
             else:
-                self.lm_head = ParallelLMHead(
-                    config.vocab_size,
-                    config.hidden_size,
-                    quant_config=quant_config,
-                    prefix=add_prefix("lm_head", prefix),
-                )
+                # load_weights keeps only "mtp.*" params, and set_embed_and_head()
+                # rebinds this head to the target's shared one. Build it on meta
+                # to avoid the transient vocab*hidden allocation.
+                with torch.device("meta"):
+                    self.lm_head = ParallelLMHead(
+                        config.vocab_size,
+                        config.hidden_size,
+                        quant_config=quant_config,
+                        prefix=add_prefix("lm_head", prefix),
+                    )
 
         self.logits_processor = LogitsProcessor(config)
 
