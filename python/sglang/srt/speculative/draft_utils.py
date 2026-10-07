@@ -98,13 +98,10 @@ class DraftBackendFactory:
 
         from sglang.srt.plugins import attention as _plugin_attn
 
-        backend_type = (
-            self.draft_attn_backend
-            if self.draft_attn_backend
-            else self.server_args.decode_attention_backend
-        )
-        if backend_type is None:
-            backend_type = self.server_args.attention_backend
+        # The split pair with the base-backend fallback already applied (the
+        # same read ``_create_backend`` makes); ServerArgs is no longer held here.
+        _, decode_backend = attention_backends()
+        backend_type = self.draft_attn_backend or decode_backend
         if backend_type not in backend_map:
             multi_step_factory = _plugin_attn.get_multi_step_factory(backend_type)
             if multi_step_factory is not None:
@@ -149,13 +146,10 @@ class DraftBackendFactory:
         # prefill through it.
         from sglang.srt.plugins import attention as _plugin_attn
 
-        backend_type = (
-            self.draft_attn_backend
-            if self.draft_attn_backend
-            else getattr(self.server_args, backend_name)
+        prefill_backend, decode_backend = attention_backends()
+        backend_type = self.draft_attn_backend or (
+            decode_backend if backend_name == "decode_attention_backend" else prefill_backend
         )
-        if backend_type is None:
-            backend_type = self.server_args.attention_backend
         if backend_type not in backend_map and _plugin_attn.is_registered(backend_type):
             backend = _plugin_attn.ATTENTION_BACKENDS[backend_type](
                 self.draft_model_runner
