@@ -58,6 +58,10 @@ def register(
             the per-token KV-cache cost in bytes summed across ``num_layers``
             effective attention layers (Mamba/recurrent layers excluded).
             Supersedes the built-in estimate derived from ``torch_dtype``.
+            On a hybrid sliding-window model the factory is also called as
+            ``(runner, num_layers, layer_ids=[...])`` once for the
+            full-attention layers and once for the sliding-window layers, so
+            each sub-pool is priced from the layers it holds.
 
     Idempotent: re-registering the same ``name`` overrides the previous entry.
     """
@@ -108,12 +112,23 @@ def has_cell_size(name: str) -> bool:
     return entry is not None and entry.cell_size_factory is not None
 
 
-def get_cell_size(name: str, runner: Any, num_layers: int) -> int:
-    """Return the plugin's per-token KV cost in bytes across ``num_layers``."""
+def get_cell_size(
+    name: str,
+    runner: Any,
+    num_layers: int,
+    layer_ids: list[int] | None = None,
+) -> int:
+    """Return the plugin's per-token KV cost in bytes across ``num_layers``.
+
+    ``layer_ids`` names the layers priced, for a sub-pool of a hybrid
+    sliding-window model; ``None`` prices the plugin's own layer set.
+    """
     factory = _REGISTRY[name].cell_size_factory
     if factory is None:
         raise TypeError(f"KV-cache plugin {name!r} registered no cell_size_factory")
-    return int(factory(runner, num_layers))
+    if layer_ids is None:
+        return int(factory(runner, num_layers))
+    return int(factory(runner, num_layers, layer_ids=list(layer_ids)))
 
 
 __all__ = [

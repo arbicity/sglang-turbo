@@ -5611,6 +5611,13 @@ class ServerArgs:
                     "intel_xpu",
                     "aiter",
                 ]
+                # Seam: a plugin-registered backend declares its own sliding
+                # window and attention-sink support.
+                from sglang.srt.layers.attention.attention_registry import (
+                    PLUGIN_ATTENTION_BACKENDS,
+                )
+
+                supported_backends += sorted(PLUGIN_ATTENTION_BACKENDS)
                 prefill_attn_backend, decode_attn_backend = (
                     self._resolved_attention_backends()
                 )
