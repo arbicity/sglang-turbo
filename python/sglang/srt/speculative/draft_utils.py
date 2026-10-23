@@ -169,7 +169,9 @@ class DraftBackendFactory:
 
         prefill_backend, decode_backend = attention_backends()
         backend_type = self.draft_attn_backend or (
-            decode_backend if backend_name == "decode_attention_backend" else prefill_backend
+            decode_backend
+            if backend_name == "decode_attention_backend"
+            else prefill_backend
         )
         if backend_type not in backend_map and _plugin_attn.is_registered(backend_type):
             backend = _plugin_attn.ATTENTION_BACKENDS[backend_type](
