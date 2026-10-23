@@ -41,6 +41,15 @@ if TYPE_CHECKING:
 ATTENTION_BACKENDS = {}
 HYBRID_GDN_SM100_BACKENDS = {"triton", "trtllm_mha", "fa4", "flashinfer"}
 
+# Names registered through sglang.srt.plugins.attention.register, tracked
+# separately so guards that whitelist the built-in backend set can recognise a
+# registered plugin backend.
+PLUGIN_ATTENTION_BACKENDS: set = set()
+# Plugin backends that declared they read the per-branch page-aligned draft
+# layout of a speculative tree at page_size > 1 (see
+# speculative_hook._PAGE_TREE_SPEC_BACKENDS).
+PAGED_TREE_SPEC_PLUGIN_BACKENDS: set = set()
+
 
 def register_attention_backend(name):
     def decorator(fn):
@@ -464,6 +473,7 @@ def attn_backend_wrapper(runner: "ModelRunner", full_attn_backend: "AttentionBac
                     # to expose an FP8 dequant workspace while a different
                     # backend (for example TRT-LLM GenMHA) owns decode.
                     allowed = HYBRID_GDN_SM100_BACKENDS
+                allowed = allowed | PLUGIN_ATTENTION_BACKENDS
                 prefill_be = runner.prefill_attention_backend_str
                 decode_be = runner.decode_attention_backend_str
                 assert prefill_be in allowed and decode_be in allowed, (

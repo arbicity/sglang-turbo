@@ -305,6 +305,9 @@ class KVCacheConfigurator:
     pp_size: int
     pp_group: Any
     model: Any
+    # Back-reference to the owning ModelRunner: plugin KV-cache factories take
+    # the runner, not this configurator.
+    model_runner: Any
     model_config: ModelConfig
     server_args: ServerArgs
     kv_cache_dtype: torch.dtype
@@ -1648,6 +1651,25 @@ class KVCacheConfigurator:
             reject_out_of_tree_path(
                 current_platform, subsystem="the block-scaled (fp4 / mxfp8) KV pool"
             )
+
+        from sglang.srt.plugins import kv_cache as _plugin_kv
+
+        plugin_dtype = get_model().kv_cache_dtype
+        if _plugin_kv.is_registered(plugin_dtype):
+            # ModelRunner.max_total_num_tokens is only assigned after configure()
+            # returns; the plugin factory runs inside configure() and reads it
+            # off the runner, so surface the computed size now.
+            self.model_runner.max_total_num_tokens = sizes.max_total_num_tokens
+            if self.is_hybrid_swa:
+                # A hybrid sliding-window model gets one pool per attention
+                # kind: the factory sizes each from its own token count.
+                self.model_runner.full_max_total_num_tokens = (
+                    sizes.full_max_total_num_tokens
+                )
+                self.model_runner.swa_max_total_num_tokens = (
+                    sizes.swa_max_total_num_tokens
+                )
+            return _plugin_kv.build_pool(plugin_dtype, self.model_runner)
 
         if is_dsv4_model:
             reject_out_of_tree_path(
