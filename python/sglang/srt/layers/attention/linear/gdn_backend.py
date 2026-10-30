@@ -649,15 +649,6 @@ class GDNAttnBackend(MambaAttnBackendBase):
             draft_token_num=forward_batch.spec_info.draft_token_num,
         )
 
-    def _replayssm_fold_uses_cutedsl(
-        self, ssm_dtype: torch.dtype, draft_token_num: int
-    ) -> bool:
-        return (
-            self.kernel_dispatcher.verify_kernel_is_flashinfer
-            and ssm_dtype == torch.bfloat16
-            and draft_token_num >= 3
-        )
-
     def _target_verify_supports_strided_qkv(
         self,
         *,
@@ -667,9 +658,9 @@ class GDNAttnBackend(MambaAttnBackendBase):
         ssm_dtype: torch.dtype,
         draft_token_num: int,
     ) -> bool:
-        # ReplaySSM Triton routes accept strides; the CuTeDSL fold does not.
+        # Rounded-update replay always uses the stride-aware Triton verifier.
         if use_replayssm_fold:
-            return not self._replayssm_fold_uses_cutedsl(ssm_dtype, draft_token_num)
+            return True
         if use_replayssm_spec:
             return True
         return self.kernel_dispatcher.target_verify_supports_strided_qkv(
@@ -1117,6 +1108,7 @@ class GDNAttnBackend(MambaAttnBackendBase):
                     layer_cache=mamba_cache_params,
                     ssm_states=ssm_states,
                     cache_indices=cache_indices,
+                    record_indices=forward_batch.req_pool_indices,
                     query_start_loc=query_start_loc,
                     retrieve_parent_token=retrieve_parent_token,
                 )
@@ -1372,13 +1364,15 @@ class GDNAttnBackend(MambaAttnBackendBase):
         layer_cache: "MambaPool.SpeculativeState",
         ssm_states: torch.Tensor,
         cache_indices: torch.Tensor,
+        record_indices: torch.Tensor,
         query_start_loc: torch.Tensor,
         retrieve_parent_token: Optional[torch.Tensor],
     ) -> torch.Tensor:
-        """Ring-writing verify; the commit fold replays the accepted prefix
-        into ``temporal``. Uses the vendored CuTe DSL MTP kernel when the
-        dispatcher selected the FlashInfer bf16-state verify, else the Triton
-        recurrent kernel (both store the same raw window)."""
+        """Record normalized FP32 keys, rounded updates and decay with Triton.
+
+        The commit fold replays the accepted prefix into ``temporal``. The
+        CuTe DSL raw-input ring has a different format and is not used here.
+        """
         from sglang.kernels.ops.attention.fla.fused_sigmoid_gating_recurrent import (
             fused_sigmoid_gating_delta_rule_update,
         )
@@ -1387,35 +1381,6 @@ class GDNAttnBackend(MambaAttnBackendBase):
             "ReplaySSM fold-every-commit supports a linear draft chain only "
             "(topk <= 1); EAGLE tree verify must use the recurrent verify."
         )
-        seq_len = query.shape[1]
-        batch_size = query_start_loc.shape[0] - 1
-        draft_token_num = seq_len // batch_size
-        if self._replayssm_fold_uses_cutedsl(ssm_states.dtype, draft_token_num):
-            from sglang.kernels.ops.attention.cutedsl_gdn_mtp_ring import (
-                gated_delta_rule_mtp,
-            )
-
-            num_v_heads = value.shape[2]
-            head_v_dim = value.shape[3]
-            out = gated_delta_rule_mtp(
-                A_log=layer.A_log.detach(),
-                a=a.view(batch_size, draft_token_num, num_v_heads),
-                dt_bias=layer.dt_bias.detach(),
-                q=query.view(batch_size, draft_token_num, *query.shape[2:]),
-                k=key.view(batch_size, draft_token_num, *key.shape[2:]),
-                v=value.view(batch_size, draft_token_num, num_v_heads, head_v_dim),
-                b=b.view(batch_size, draft_token_num, num_v_heads),
-                initial_state_source=ssm_states,
-                initial_state_indices=cache_indices,
-                use_qk_l2norm_in_kernel=True,
-                disable_state_update=True,
-                cache_ring=True,
-                replayssm_rawv=layer_cache.replayssm_rawv,
-                replayssm_rawk=layer_cache.replayssm_rawk,
-                replayssm_g=layer_cache.replayssm_g,
-                replayssm_beta=layer_cache.replayssm_beta,
-            )
-            return out.view(1, seq_len, num_v_heads, head_v_dim)
         return fused_sigmoid_gating_delta_rule_update(
             A_log=layer.A_log,
             dt_bias=layer.dt_bias,
@@ -1437,6 +1402,7 @@ class GDNAttnBackend(MambaAttnBackendBase):
             replayssm_rawk=layer_cache.replayssm_rawk,
             replayssm_g=layer_cache.replayssm_g,
             replayssm_beta=layer_cache.replayssm_beta,
+            replayssm_ring_indices=record_indices,
         )
 
     def _replayssm_target_verify(

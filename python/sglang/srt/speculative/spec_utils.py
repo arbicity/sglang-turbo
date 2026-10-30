@@ -1010,6 +1010,7 @@ def commit_mamba_states_after_verify(
         commit_gdn_replayssm_fold_after_verify(
             spec_state=spec_state,
             state_batch_indices=state_batch_indices,
+            record_indices=batch.req_pool_indices,
             accept_lens=accept_lens,
             last_correct_step_indices=last_correct_step_indices,
             mamba_track_indices=batch.mamba_track_indices,

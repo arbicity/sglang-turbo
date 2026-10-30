@@ -666,13 +666,11 @@ class MambaPool:
         self.linear_replayssm_cache_len = linear_replayssm_cache_len
         # ReplaySSM: the decode ring (--enable-linear-replayssm) allocates the
         # chunked (d, k) records + write_pos; the spec-verify flag
-        # (--enable-linear-replayssm-spec) uses compact replay for GDN and raw
-        # fold-every-commit for KDA. The shared g allocation gates on
+        # (--enable-linear-replayssm-spec) folds rounded GDN updates or raw
+        # KDA inputs after every commit. The shared g allocation gates on
         # `_replayssm_on`.
         self.enable_linear_replayssm_spec = enable_linear_replayssm_spec
-        self.replayssm_spec_fold = bool(
-            enable_linear_replayssm_spec and cache_params.is_kda
-        )
+        self.replayssm_spec_fold = bool(enable_linear_replayssm_spec)
         _replayssm_on = enable_linear_replayssm or enable_linear_replayssm_spec
 
         # for disagg with nvlink
@@ -811,10 +809,10 @@ class MambaPool:
                     dtype=torch.float32,
                     device=device,
                 )
-                # KDA still uses raw-input fold-every-commit. GDN materializes
-                # its compact d/k/g history directly and needs no duplicate ring.
-                if enable_linear_replayssm_spec and cache_params.is_kda:
-                    if cache_params.is_kda or not self.replayssm_spec_fold:
+                # KDA records activation-dtype inputs. GDN records the actual
+                # normalized key, post-beta update, and decay in FP32.
+                if enable_linear_replayssm_spec:
+                    if cache_params.is_kda:
                         # Backstop for the KDA ring invariants; this pool is
                         # sized with the final adaptive-aware draft maximum.
                         if L & (L - 1) != 0:
@@ -829,33 +827,20 @@ class MambaPool:
                                 f"spec-verify ring too small: {L} < "
                                 f"2 * {speculative_num_draft_tokens} (early-flush margin)"
                             )
+                    record_dtype = conv_dtype if cache_params.is_kda else torch.float32
                     replayssm_rawv = torch.zeros(
                         size=(num_mamba_layers, num_slots, hv, record_len, v_dim),
-                        dtype=conv_dtype,
+                        dtype=record_dtype,
                         device=device,
                     )
                     replayssm_rawk = torch.zeros(
                         size=(num_mamba_layers, num_slots, h_k, record_len, k_dim),
-                        dtype=conv_dtype,
+                        dtype=record_dtype,
                         device=device,
                     )
                     replayssm_beta = torch.zeros(
                         size=(num_mamba_layers, num_slots, hv, record_len),
                         dtype=torch.float32,
-                        device=device,
-                    )
-                elif enable_linear_replayssm_spec and ring_dtype != torch.float32:
-                    # Low parts of compact D and normalized K. The rings follow
-                    # the activation dtype regardless of checkpoint dtype, so
-                    # materialization always needs both parts.
-                    replayssm_rawv = torch.zeros(
-                        size=(num_mamba_layers, num_slots, hv, record_len, v_dim),
-                        dtype=conv_dtype,
-                        device=device,
-                    )
-                    replayssm_rawk = torch.zeros(
-                        size=(num_mamba_layers, num_slots, h_k, record_len, k_dim),
-                        dtype=conv_dtype,
                         device=device,
                     )
 

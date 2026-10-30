@@ -505,8 +505,7 @@ def handle_linear_attn_backend(server_args: Any):
         if cfg.mamba_ssm_dtype is None:
             logger.info(
                 "--enable-linear-replayssm-spec: setting --mamba-ssm-dtype "
-                "float32 (cached replay uses compensated checkpoint "
-                "projection and materialization)."
+                "float32 (speculative replay folds rounded FP32 updates)."
             )
             declare_resolution(
                 server_args,
@@ -516,7 +515,7 @@ def handle_linear_attn_backend(server_args: Any):
         elif cfg.mamba_ssm_dtype != "float32":
             logger.warning(
                 "--enable-linear-replayssm-spec with --mamba-ssm-dtype=%s: the "
-                "compact checkpoint is materialized after each accepted "
+                "checkpoint is materialized after each accepted "
                 "verify window; validate long-sequence accuracy and throughput.",
                 cfg.mamba_ssm_dtype,
             )

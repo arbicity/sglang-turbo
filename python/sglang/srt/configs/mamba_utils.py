@@ -127,8 +127,8 @@ class BaseLinearStateParams(ABC):
     def replayssm_ring_bytes_per_req(self, record_len: int) -> int:
         """ReplaySSM spec-verify scratch bytes across all layers.
 
-        GDN keeps compact d/k/g plus low parts for the activation-dtype d/k
-        rings. KDA keeps its raw-input fold window and d/k rings.
+        GDN keeps FP32 normalized-key/update/decay records. KDA keeps its
+        raw-input fold window and d/k rings.
         """
         hv, v_dim, k_dim = self.shape.temporal
         h_k = self.shape.num_k_heads_per_tp
@@ -145,15 +145,11 @@ class BaseLinearStateParams(ABC):
             )
         else:
             per_layer = (
-                hv * record_len * v_dim * conv_b  # d
-                + h_k * record_len * k_dim * conv_b  # normalized k
+                hv * record_len * v_dim * fp32_b  # rounded update
+                + h_k * record_len * k_dim * fp32_b  # normalized k
                 + hv * record_len * fp32_b  # scalar g
+                + hv * record_len * fp32_b  # beta (shared ring interface)
             )
-            if self.dtype.conv != torch.float32:
-                per_layer += (
-                    hv * record_len * v_dim * conv_b  # d low part
-                    + h_k * record_len * k_dim * conv_b  # normalized-k low part
-                )
         return per_layer * len(self.layers)
 
     @property

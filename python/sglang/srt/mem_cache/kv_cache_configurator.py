@@ -2968,6 +2968,8 @@ class KVCacheConfigurator:
         )
         if replayssm_active:
             record_len = get_exec().mamba.linear_replayssm_cache_len
+            if self.hybrid_kda_config is None:
+                record_len = max_speculative_num_draft_tokens() or record_len
             replayssm_ring_per_req = (
                 config.mamba2_cache_params.replayssm_ring_bytes_per_req(
                     record_len=record_len

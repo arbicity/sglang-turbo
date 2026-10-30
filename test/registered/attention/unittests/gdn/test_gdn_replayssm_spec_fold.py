@@ -47,7 +47,9 @@ def _make_window(step_seed: int):
     }
 
 
-def _run_verify(inputs, gating, state, slots, *, snapshots=None, rings=None):
+def _run_verify(
+    inputs, gating, state, slots, *, snapshots=None, rings=None, record_slots=None
+):
     kwargs = {}
     if snapshots is not None:
         kwargs.update(
@@ -63,6 +65,7 @@ def _run_verify(inputs, gating, state, slots, *, snapshots=None, rings=None):
             replayssm_rawk=rings["rawk"][0],
             replayssm_g=rings["g"][0],
             replayssm_beta=rings["beta"][0],
+            replayssm_ring_indices=record_slots,
         )
     cu_seqlens = torch.arange(0, B * T + 1, step=T, dtype=torch.int32, device=DEVICE)
     return fused_sigmoid_gating_delta_rule_update(
@@ -85,16 +88,24 @@ def _run_verify(inputs, gating, state, slots, *, snapshots=None, rings=None):
     )
 
 
-def _make_rings(dtype=torch.bfloat16):
+def _make_rings():
     return {
-        "rawv": torch.zeros(1, NUM_SLOTS, HV, T, V, device=DEVICE, dtype=dtype),
-        "rawk": torch.zeros(1, NUM_SLOTS, H, T, K, device=DEVICE, dtype=dtype),
+        "rawv": torch.zeros(1, NUM_SLOTS, HV, T, V, device=DEVICE, dtype=torch.float32),
+        "rawk": torch.zeros(1, NUM_SLOTS, H, T, K, device=DEVICE, dtype=torch.float32),
         "g": torch.zeros(1, NUM_SLOTS, HV, T, device=DEVICE, dtype=torch.float32),
         "beta": torch.zeros(1, NUM_SLOTS, HV, T, device=DEVICE, dtype=torch.float32),
     }
 
 
-def _fold(state, rings, slots, accept_lens, track_slots=None, track_steps=None):
+def _fold(
+    state,
+    rings,
+    slots,
+    accept_lens,
+    track_slots=None,
+    track_steps=None,
+    record_slots=None,
+):
     commit_gdn_replayssm_fold_all_layers(
         checkpoint_state=state,
         rawv_cache=rings["rawv"],
@@ -108,6 +119,8 @@ def _fold(state, rings, slots, accept_lens, track_slots=None, track_steps=None):
         mamba_track_indices=track_slots,
         mamba_steps_to_track=track_steps,
         null_block_id=-1,
+        rounded_update=True,
+        record_indices=record_slots,
     )
 
 
@@ -136,6 +149,48 @@ class TestGdnReplayssmSpecFold(CustomTestCase):
                 inputs, self.gating, state.clone(), self.slots, rings=_make_rings()
             )
             self.assertTrue(torch.equal(out_plain, out_ring), f"{dtype=}")
+
+    def test_request_records_are_separate_from_physical_state_slots(self):
+        slots = torch.tensor([10, 12, 14], device=DEVICE, dtype=torch.int32)
+        # Noncontiguous request indices also exercise both passed strides.
+        record_slots = torch.tensor(
+            [2, -1, 0, -1, 1, -1], device=DEVICE, dtype=torch.int32
+        )[::2]
+        state = torch.randn(16, HV, K, V, device=DEVICE, dtype=torch.float32) * 0.01
+        rings = {name: value[:, :B] for name, value in _make_rings().items()}
+        snapshots = torch.zeros(16, T, HV, K, V, device=DEVICE, dtype=torch.float32)
+        inputs = _make_window(71)
+        expected_out = _run_verify(
+            inputs, self.gating, state.clone(), slots, snapshots=snapshots
+        )
+        folded = state.clone().unsqueeze(0)
+        actual_out = _run_verify(
+            inputs,
+            self.gating,
+            folded[0],
+            slots,
+            rings=rings,
+            record_slots=record_slots,
+        )
+        _fold(folded, rings, slots, self.accept_lens, record_slots=record_slots)
+        self.assertTrue(torch.equal(expected_out, actual_out))
+        for slot, accepted in zip(slots.tolist(), self.accept_lens.tolist()):
+            torch.testing.assert_close(
+                folded[0, slot], snapshots[slot, accepted - 1], rtol=0, atol=FP32_ATOL
+            )
+        untouched = [i for i in range(16) if i not in slots.tolist()]
+        self.assertTrue(torch.equal(folded[0, untouched], state[untouched]))
+
+    def test_rounded_fold_rejects_lower_precision_records(self):
+        rings = _make_rings()
+        rings["rawv"] = rings["rawv"].to(torch.bfloat16)
+        with self.assertRaisesRegex(ValueError, "FP32 key and update records"):
+            _fold(
+                self._state(torch.float32).unsqueeze(0),
+                rings,
+                self.slots,
+                self.accept_lens,
+            )
 
     def test_ring_write_accepts_strided_qkv_views(self):
         inputs = _make_window(12)
