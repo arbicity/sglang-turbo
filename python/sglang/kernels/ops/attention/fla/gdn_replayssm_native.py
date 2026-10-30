@@ -111,7 +111,9 @@ def capture_native_verify(
             raise ValueError(
                 "Native GDN replay supports activation precision up to FP32"
             )
-        target[safe_requests.long(), :steps] = value.reshape(batch, steps, *tail)
+        target[safe_requests.long(), :steps] = value.reshape(batch, steps, *tail).to(
+            target.dtype
+        )
     if suppress_snapshots:
         snapshot_indices = torch.full_like(
             kwargs["intermediate_state_indices"][:batch], -1
