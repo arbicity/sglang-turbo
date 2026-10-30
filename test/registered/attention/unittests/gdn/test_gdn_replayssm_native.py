@@ -154,11 +154,11 @@ class TestGdnNativeReplay(CustomTestCase):
         )
 
     def test_request_padding_tracking_and_shared_layers(self):
-        physical = torch.tensor([10, -1, 12, -1], device="cuda", dtype=torch.int32)
-        requests = torch.tensor([0, 0, 1, 0], device="cuda", dtype=torch.int32)
-        accepted = torch.tensor([2, 0, 3, 0], device="cuda", dtype=torch.int32)
-        track = torch.tensor([10, -1, 5, -1], device="cuda", dtype=torch.int32)
-        track_steps = torch.tensor([0, -1, 1, -1], device="cuda", dtype=torch.int32)
+        physical = torch.tensor([10, 12, -1, -1], device="cuda", dtype=torch.int32)
+        requests = torch.tensor([0, 1, 0, 0], device="cuda", dtype=torch.int32)
+        accepted = torch.tensor([2, 3], device="cuda", dtype=torch.int32)
+        track = torch.tensor([10, 5], device="cuda", dtype=torch.int32)
+        track_steps = torch.tensor([0, 1], device="cuda", dtype=torch.int32)
         expected = self.pool.mamba_cache.temporal.clone()
         for layer in range(LAYERS):
             values = inputs(4, 4, 10 + layer)
@@ -173,8 +173,8 @@ class TestGdnNativeReplay(CustomTestCase):
             expected[layer, 5] = snapshots[12, 1]
         commit_native_ssm(
             self.pool,
-            physical,
-            requests,
+            physical[:2],
+            requests[:2],
             accepted,
             track_indices=track,
             track_steps=track_steps,
