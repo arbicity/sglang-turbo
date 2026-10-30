@@ -22,6 +22,7 @@ register_cuda_ci(est_time=60, stage="base-b", runner_config="1-gpu-large")
 
 H, HV, K, V, WINDOW, LAYERS = 8, 24, 128, 128, 6, 2
 GRAPH_COMMITS = 256
+STATE_DTYPE = torch.float32
 
 
 def make_pool():
@@ -40,7 +41,7 @@ def make_pool():
     )
     params = Mamba2CacheParams(
         shape=shape,
-        dtype=Mamba2StateDType(conv=torch.bfloat16, temporal=torch.float32),
+        dtype=Mamba2StateDType(conv=torch.bfloat16, temporal=STATE_DTYPE),
         layers=list(range(LAYERS)),
     )
     return MambaPool(
@@ -162,7 +163,9 @@ class TestGdnNativeReplay(CustomTestCase):
         expected = self.pool.mamba_cache.temporal.clone()
         for layer in range(LAYERS):
             values = inputs(4, 4, 10 + layer)
-            snapshots = torch.empty(17, WINDOW, HV, V, K, device="cuda")
+            snapshots = torch.empty(
+                17, WINDOW, HV, V, K, device="cuda", dtype=STATE_DTYPE
+            )
             expected_out = self.run_verify(
                 layer, values, expected[layer], physical, snapshots, physical, 4
             )
@@ -190,7 +193,9 @@ class TestGdnNativeReplay(CustomTestCase):
         initial = self.pool.mamba_cache.temporal.clone()
         expected_state = initial.clone()
         values = [inputs(batch, WINDOW, 100 + layer) for layer in range(LAYERS)]
-        snapshots = torch.empty(LAYERS, 17, WINDOW, HV, V, K, device="cuda")
+        snapshots = torch.empty(
+            LAYERS, 17, WINDOW, HV, V, K, device="cuda", dtype=STATE_DTYPE
+        )
 
         def baseline_step():
             outputs = []
