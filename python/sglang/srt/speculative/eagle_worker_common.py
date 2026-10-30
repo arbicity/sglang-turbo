@@ -758,6 +758,14 @@ def run_eagle_verify(
         accept_index,
         num_draft_tokens,
         prepared_step_indices=prepared_commit_steps,
+        native_replay_shape=(
+            (
+                target_worker.model_runner.decode_cuda_graph_runner.bs,
+                target_worker.model_runner.decode_cuda_graph_runner.captured_req_width,
+            )
+            if can_run_cuda_graph
+            else None
+        ),
     )
 
     if not fused_commit_outputs and not batch.forward_mode.is_idle():

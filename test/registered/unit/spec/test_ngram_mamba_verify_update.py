@@ -200,6 +200,39 @@ class TestPPReplaySSMVerifySourceRows(CustomTestCase):
                 scatter.assert_called_once()
                 torch.testing.assert_close(scatter.call_args.args[4], source_rows)
 
+    def test_native_replay_keeps_request_and_checkpoint_rows_separate(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from sglang.kernels.ops.attention.fla.gdn_replayssm_native import (
+            commit_native_after_verify,
+        )
+
+        physical = torch.tensor([5, 7])
+        requests = torch.tensor([2, 4])
+        source_rows = torch.tensor([3, 1])
+        with (
+            patch(
+                "sglang.kernels.ops.attention.fla.gdn_replayssm_native.commit_native_ssm"
+            ) as native,
+            patch(
+                "sglang.kernels.ops.mamba.mamba_state_scatter_triton.fused_conv_window_scatter_with_mask"
+            ) as scatter,
+        ):
+            commit_native_after_verify(
+                pool=SimpleNamespace(mamba_cache=self._spec_state()),
+                state_batch_indices=physical,
+                record_indices=requests,
+                accept_lens=torch.tensor([3, 1]),
+                last_correct_step_indices=torch.tensor([2, 0]),
+                src_indices_raw=source_rows,
+                replay_shape=(4, 6),
+            )
+        self.assertIs(native.call_args.args[1], physical)
+        self.assertIs(native.call_args.args[2], requests)
+        self.assertEqual(native.call_args.kwargs["replay_shape"], (4, 6))
+        self.assertIs(scatter.call_args.kwargs["src_indices_raw"], source_rows)
+
     def test_circular_commit_reads_pp_request_rows(self):
         from sglang.srt.speculative.spec_utils import commit_mamba_states_after_verify
 

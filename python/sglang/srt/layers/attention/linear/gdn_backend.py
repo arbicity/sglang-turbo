@@ -632,7 +632,7 @@ class GDNAttnBackend(MambaAttnBackendBase):
         mamba_cache = mamba_pool.mamba_cache
         is_gdn_replayssm = not getattr(mamba_pool, "replayssm_is_kda", False)
         use_replayssm_fold = (
-            mamba_cache.replayssm_rawv is not None
+            mamba_cache.replayssm_native_q is not None
             and getattr(mamba_pool, "replayssm_spec_fold", False)
             and is_gdn_replayssm
         )
@@ -649,15 +649,6 @@ class GDNAttnBackend(MambaAttnBackendBase):
             draft_token_num=forward_batch.spec_info.draft_token_num,
         )
 
-    def _replayssm_fold_uses_cutedsl(
-        self, ssm_dtype: torch.dtype, draft_token_num: int
-    ) -> bool:
-        return (
-            self.kernel_dispatcher.verify_kernel_is_flashinfer
-            and ssm_dtype == torch.bfloat16
-            and draft_token_num >= 3
-        )
-
     def _target_verify_supports_strided_qkv(
         self,
         *,
@@ -667,9 +658,11 @@ class GDNAttnBackend(MambaAttnBackendBase):
         ssm_dtype: torch.dtype,
         draft_token_num: int,
     ) -> bool:
-        # ReplaySSM Triton routes accept strides; the CuTeDSL fold does not.
+        # Native replay preserves the original verifier and input layout.
         if use_replayssm_fold:
-            return not self._replayssm_fold_uses_cutedsl(ssm_dtype, draft_token_num)
+            return self.kernel_dispatcher.target_verify_supports_strided_qkv(
+                retrieve_parent_token
+            )
         if use_replayssm_spec:
             return True
         return self.kernel_dispatcher.target_verify_supports_strided_qkv(
@@ -999,7 +992,7 @@ class GDNAttnBackend(MambaAttnBackendBase):
             )
             mamba_pool = self.req_to_token_pool.mamba_pool
             use_replayssm_fold = (
-                mamba_cache_params.replayssm_rawv is not None
+                mamba_cache_params.replayssm_native_q is not None
                 and getattr(mamba_pool, "replayssm_spec_fold", False)
                 and not getattr(mamba_pool, "replayssm_is_kda", False)
             )
@@ -1107,16 +1100,18 @@ class GDNAttnBackend(MambaAttnBackendBase):
             # verify, fold on commit), circular ring, or the snapshotting
             # fallback when neither ring is allocated.
             if use_replayssm_fold:
-                core_attn_out = self._replayssm_fold_target_verify(
+                core_attn_out = self._replayssm_native_target_verify(
                     layer=layer,
                     query=query,
                     key=key,
                     value=value,
                     a=a,
                     b=b,
-                    layer_cache=mamba_cache_params,
                     ssm_states=ssm_states,
                     cache_indices=cache_indices,
+                    record_indices=forward_batch.req_pool_indices,
+                    intermediate_state_indices=intermediate_state_indices,
+                    cache_steps=forward_batch.spec_info.draft_token_num,
                     query_start_loc=query_start_loc,
                     retrieve_parent_token=retrieve_parent_token,
                 )
@@ -1360,63 +1355,37 @@ class GDNAttnBackend(MambaAttnBackendBase):
         )
         return output
 
-    def _replayssm_fold_target_verify(
+    def _replayssm_native_target_verify(
         self,
         *,
-        layer: RadixLinearAttention,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
-        a: torch.Tensor,
-        b: torch.Tensor,
-        layer_cache: "MambaPool.SpeculativeState",
-        ssm_states: torch.Tensor,
-        cache_indices: torch.Tensor,
-        query_start_loc: torch.Tensor,
-        retrieve_parent_token: Optional[torch.Tensor],
+        layer,
+        query,
+        key,
+        value,
+        a,
+        b,
+        ssm_states,
+        cache_indices,
+        record_indices,
+        query_start_loc,
+        intermediate_state_indices,
+        cache_steps,
+        retrieve_parent_token,
     ) -> torch.Tensor:
-        """Ring-writing verify; the commit fold replays the accepted prefix
-        into ``temporal``. Uses the vendored CuTe DSL MTP kernel when the
-        dispatcher selected the FlashInfer bf16-state verify, else the Triton
-        recurrent kernel (both store the same raw window)."""
-        from sglang.kernels.ops.attention.fla.fused_sigmoid_gating_recurrent import (
-            fused_sigmoid_gating_delta_rule_update,
+        from sglang.kernels.ops.attention.fla.gdn_replayssm_native import (
+            capture_native_verify,
         )
 
         assert retrieve_parent_token is None, (
-            "ReplaySSM fold-every-commit supports a linear draft chain only "
-            "(topk <= 1); EAGLE tree verify must use the recurrent verify."
+            "Native GDN replay requires a linear draft chain"
         )
-        seq_len = query.shape[1]
-        batch_size = query_start_loc.shape[0] - 1
-        draft_token_num = seq_len // batch_size
-        if self._replayssm_fold_uses_cutedsl(ssm_states.dtype, draft_token_num):
-            from sglang.kernels.ops.attention.cutedsl_gdn_mtp_ring import (
-                gated_delta_rule_mtp,
-            )
-
-            num_v_heads = value.shape[2]
-            head_v_dim = value.shape[3]
-            out = gated_delta_rule_mtp(
-                A_log=layer.A_log.detach(),
-                a=a.view(batch_size, draft_token_num, num_v_heads),
-                dt_bias=layer.dt_bias.detach(),
-                q=query.view(batch_size, draft_token_num, *query.shape[2:]),
-                k=key.view(batch_size, draft_token_num, *key.shape[2:]),
-                v=value.view(batch_size, draft_token_num, num_v_heads, head_v_dim),
-                b=b.view(batch_size, draft_token_num, num_v_heads),
-                initial_state_source=ssm_states,
-                initial_state_indices=cache_indices,
-                use_qk_l2norm_in_kernel=True,
-                disable_state_update=True,
-                cache_ring=True,
-                replayssm_rawv=layer_cache.replayssm_rawv,
-                replayssm_rawk=layer_cache.replayssm_rawk,
-                replayssm_g=layer_cache.replayssm_g,
-                replayssm_beta=layer_cache.replayssm_beta,
-            )
-            return out.view(1, seq_len, num_v_heads, head_v_dim)
-        return fused_sigmoid_gating_delta_rule_update(
+        pool = self.req_to_token_pool.mamba_pool
+        return capture_native_verify(
+            pool,
+            self.req_to_token_pool.mamba2_layer_index(layer.layer_id),
+            record_indices,
+            self.kernel_dispatcher.target_verify,
+            suppress_snapshots=not self.kernel_dispatcher.verify_kernel_is_flashinfer,
             A_log=layer.A_log,
             dt_bias=layer.dt_bias,
             q=query,
@@ -1424,19 +1393,14 @@ class GDNAttnBackend(MambaAttnBackendBase):
             v=value,
             a=a,
             b=b,
-            initial_state_source=ssm_states,
-            initial_state_indices=cache_indices,
-            cu_seqlens=query_start_loc,
-            use_qk_l2norm_in_kernel=True,
-            softplus_beta=1.0,
-            softplus_threshold=20.0,
-            is_kda=False,
-            disable_state_update=True,
-            cache_ring=True,
-            replayssm_rawv=layer_cache.replayssm_rawv,
-            replayssm_rawk=layer_cache.replayssm_rawk,
-            replayssm_g=layer_cache.replayssm_g,
-            replayssm_beta=layer_cache.replayssm_beta,
+            ssm_states=ssm_states,
+            cache_indices=cache_indices,
+            query_start_loc=query_start_loc,
+            intermediate_states_buffer=pool.replayssm_native_scratch,
+            intermediate_state_indices=intermediate_state_indices,
+            cache_steps=cache_steps,
+            retrieve_parent_token=None,
+            stable_rows=pp_spec_stable_rows_enabled(),
         )
 
     def _replayssm_target_verify(

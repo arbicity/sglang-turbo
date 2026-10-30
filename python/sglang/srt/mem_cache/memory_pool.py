@@ -534,6 +534,13 @@ class MambaPool:
         replayssm_rawv: Optional[torch.Tensor] = None
         replayssm_rawk: Optional[torch.Tensor] = None
         replayssm_beta: Optional[torch.Tensor] = None
+        # Native GDN replay: [layers, request rows, window, heads, dim]
+        # (a/b omit dim). These are request scratch, never checkpoint state.
+        replayssm_native_q: Optional[torch.Tensor] = None
+        replayssm_native_k: Optional[torch.Tensor] = None
+        replayssm_native_v: Optional[torch.Tensor] = None
+        replayssm_native_a: Optional[torch.Tensor] = None
+        replayssm_native_b: Optional[torch.Tensor] = None
 
         def at_layer_idx(self, layer: int):
             kwargs = {}
@@ -670,10 +677,14 @@ class MambaPool:
         # fold-every-commit for KDA. The shared g allocation gates on
         # `_replayssm_on`.
         self.enable_linear_replayssm_spec = enable_linear_replayssm_spec
-        self.replayssm_spec_fold = bool(
+        self.replayssm_spec_fold = bool(enable_linear_replayssm_spec)
+        native_spec = enable_linear_replayssm_spec and not cache_params.is_kda
+        _replayssm_on = enable_linear_replayssm or (
             enable_linear_replayssm_spec and cache_params.is_kda
         )
-        _replayssm_on = enable_linear_replayssm or enable_linear_replayssm_spec
+        self.replayssm_native_contexts = {}
+        self.replayssm_native_active_shape = None
+        self.replayssm_native_scratch = None
 
         # for disagg with nvlink
         self.enable_custom_mem_pool, self.custom_mem_pool, _ = (
@@ -757,6 +768,32 @@ class MambaPool:
             # (--enable-linear-replayssm-spec) shares this allocation.
             replayssm_d = replayssm_k = replayssm_g = None
             replayssm_rawv = replayssm_rawk = replayssm_beta = None
+            native_q = native_k = native_v = native_a = native_b = None
+            if native_spec:
+                hv, v_dim, k_dim = temporal_state_shape
+                h_k = cache_params.shape.num_k_heads_per_tp
+                window = speculative_num_draft_tokens or linear_replayssm_cache_len
+                # One extra raw-record row safely absorbs padded requests.
+                record_rows = spec_state_size + 2
+
+                def native_records(*tail):
+                    return torch.empty(
+                        (num_mamba_layers, record_rows, window, *tail),
+                        dtype=torch.float32,
+                        device=device,
+                    )
+
+                native_q = native_records(h_k, k_dim)
+                native_k = native_records(h_k, k_dim)
+                native_v = native_records(hv, v_dim)
+                native_a = native_records(hv)
+                native_b = native_records(hv)
+                if num_mamba_layers:
+                    self.replayssm_native_scratch = torch.empty(
+                        (spec_state_size + 1, window, hv, v_dim, k_dim),
+                        dtype=ssm_dtype,
+                        device=device,
+                    )
             if _replayssm_on:
                 hv, v_dim, k_dim = temporal_state_shape
                 h_k = getattr(cache_params.shape, "num_k_heads_per_tp", hv)
@@ -972,6 +1009,11 @@ class MambaPool:
                     replayssm_rawv=replayssm_rawv,
                     replayssm_rawk=replayssm_rawk,
                     replayssm_beta=replayssm_beta,
+                    replayssm_native_q=native_q,
+                    replayssm_native_k=native_k,
+                    replayssm_native_v=native_v,
+                    replayssm_native_a=native_a,
+                    replayssm_native_b=native_b,
                 )
                 intermediate_ssm_gb = (
                     get_tensor_size_bytes(intermediate_ssm_state_cache) / GB
@@ -998,6 +1040,11 @@ class MambaPool:
                     replayssm_rawv=replayssm_rawv,
                     replayssm_rawk=replayssm_rawk,
                     replayssm_beta=replayssm_beta,
+                    replayssm_native_q=native_q,
+                    replayssm_native_k=native_k,
+                    replayssm_native_v=native_v,
+                    replayssm_native_a=native_a,
+                    replayssm_native_b=native_b,
                 )
                 logger.info(
                     f"Mamba Cache is allocated. "
@@ -1268,6 +1315,11 @@ class MambaPool:
             "replayssm_rawv",
             "replayssm_rawk",
             "replayssm_beta",
+            "replayssm_native_q",
+            "replayssm_native_k",
+            "replayssm_native_v",
+            "replayssm_native_a",
+            "replayssm_native_b",
         }
     )
 

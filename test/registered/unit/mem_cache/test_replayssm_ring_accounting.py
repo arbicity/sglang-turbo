@@ -63,14 +63,21 @@ def _gdn_params(temporal_dtype=torch.float32):
 
 class TestReplaySSMRingAccounting(CustomTestCase):
     def test_gdn_fold(self):
-        # d 512 + normalized k 512 + scalar g 128 + d/k low parts 1024 = 2176
+        # FP32 q/k/v/a/b: (2*4*8 + 4*8 + 2*4) * 8 * 4 = 3328
         self.assertEqual(
             _gdn_params().replayssm_ring_bytes_per_req(record_len=RL),
-            2176 * len(LAYERS),
+            3328 * len(LAYERS),
         )
         self.assertEqual(
             _gdn_params(torch.bfloat16).replayssm_ring_bytes_per_req(record_len=RL),
-            2176 * len(LAYERS),
+            3328 * len(LAYERS),
+        )
+        self.assertEqual(
+            _gdn_params().replayssm_shared_snapshot_bytes_per_req(RL), 8192
+        )
+        self.assertEqual(
+            _gdn_params(torch.bfloat16).replayssm_shared_snapshot_bytes_per_req(RL),
+            4096,
         )
 
     def test_kda_fold(self):
