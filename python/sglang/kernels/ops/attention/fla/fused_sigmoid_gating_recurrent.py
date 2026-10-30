@@ -189,8 +189,6 @@ def fused_sigmoid_gating_delta_rule_update_kernel(
     replayssm_rawk=None,
     replayssm_g=None,
     replayssm_beta=None,
-    replayssm_ring_indices=None,
-    stride_ring_indices: tl.constexpr = 0,
     stride_rawv_slot: tl.constexpr = 0,
     stride_rawk_slot: tl.constexpr = 0,
     stride_g_slot: tl.constexpr = 0,
@@ -370,7 +368,7 @@ def fused_sigmoid_gating_delta_rule_update_kernel(
         # i_hv. step_idx < MAX_CACHE_LEN: absorb-inflated rows can exceed the
         # ring; the overflow steps are past the committable prefix, so drop them
         # (writing them would smash the next slot's ring).
-        if CACHE_RING and IS_KDA:
+        if CACHE_RING:
             ring_slot = tl.load(h0_indices + i_n).to(tl.int64)
             if ring_slot >= 0 and step_idx < MAX_CACHE_LEN:
                 tl.store(
@@ -456,64 +454,13 @@ def fused_sigmoid_gating_delta_rule_update_kernel(
             else:
                 b_h *= tl.exp(b_g[:, None])
         else:
-            b_decay = tl.exp(b_g)
-            b_h = tl.inline_asm_elementwise(
-                "mul.rn.f32 $0, $1, $2;",
-                constraints="=f,f,f",
-                args=[b_h, b_decay],
-                dtype=tl.float32,
-                is_pure=True,
-                pack=1,
-            )
+            b_h *= tl.exp(b_g)
 
         # Delta rule: v -= sum(h * k, dim=0)
         b_v -= tl.sum(b_h * b_k[:, None], 0)
 
         # Apply beta gating: v *= beta
         b_v *= b_beta
-
-        if CACHE_RING and not IS_KDA:
-            if replayssm_ring_indices is None:
-                ring_slot = tl.load(h0_indices + i_n).to(tl.int64)
-            else:
-                ring_slot = tl.load(
-                    replayssm_ring_indices + i_n * stride_ring_indices
-                ).to(tl.int64)
-            record_valid = (ring_slot >= 0) & (step_idx < MAX_CACHE_LEN)
-            tl.store(
-                replayssm_rawv
-                + ring_slot * stride_rawv_slot
-                + i_hv * MAX_CACHE_LEN * V
-                + step_idx * V
-                + o_v,
-                b_v.to(replayssm_rawv.dtype.element_ty),
-                mask=mask_v & record_valid,
-            )
-            tl.store(
-                replayssm_rawk
-                + ring_slot * stride_rawk_slot
-                + i_h * MAX_CACHE_LEN * K
-                + step_idx * K
-                + o_k,
-                b_k.to(replayssm_rawk.dtype.element_ty),
-                mask=mask_k & record_valid & (i_v == 0),
-            )
-            tl.store(
-                replayssm_g
-                + ring_slot * stride_g_slot
-                + i_hv * MAX_CACHE_LEN
-                + step_idx,
-                b_decay,
-                mask=record_valid & (i_v == 0),
-            )
-            tl.store(
-                replayssm_beta
-                + ring_slot * stride_beta_slot
-                + i_hv * MAX_CACHE_LEN
-                + step_idx,
-                b_beta,
-                mask=record_valid & (i_v == 0) & (i_k == 0),
-            )
 
         # Update hidden state: h += k[:, None] * v[None, :]
         if MATCH_CUTEDSL_DECODE:
@@ -529,10 +476,7 @@ def fused_sigmoid_gating_delta_rule_update_kernel(
                 pack=1,
             )
         else:
-            if IS_KDA:
-                b_h += b_k[:, None] * b_v[None, :]
-            else:
-                b_h = tl.fma(b_k[:, None], b_v[None, :], b_h)
+            b_h += b_k[:, None] * b_v[None, :]
 
         # Compute output: o = sum(h * q, dim=0)
         b_o = tl.sum(b_h * b_q[:, None], 0)
@@ -607,8 +551,9 @@ def fused_sigmoid_gating_delta_rule_update(
     intermediate_state_indices: Optional[torch.Tensor] = None,
     cache_steps: Optional[int] = None,
     retrieve_parent_token: Optional[torch.Tensor] = None,
-    # Speculative records: KDA stores raw inputs/gate/beta; GDN stores FP32
-    # normalized keys, rounded updates and decay for exact commit replay.
+    # fused ReplaySSM ring-write (spec verify). When cache_ring, each draft step
+    # stores pre-norm k / raw v / gate / beta into these per-slot rings,
+    # replacing the eager ring-write. Off by default -> decode unchanged.
     cache_ring: bool = False,
     replayssm_rawv: Optional[torch.Tensor] = None,
     replayssm_rawk: Optional[torch.Tensor] = None,
@@ -620,7 +565,6 @@ def fused_sigmoid_gating_delta_rule_update(
     # decays and updates through FMA, and a BF16 state pool is rounded after
     # every token.
     match_cutedsl_decode: bool = False,
-    replayssm_ring_indices: Optional[torch.Tensor] = None,
 ):
     """
     Fused triton implementation of sigmoid gating delta rule update.
@@ -789,12 +733,6 @@ def fused_sigmoid_gating_delta_rule_update(
         replayssm_rawk=replayssm_rawk,
         replayssm_g=replayssm_g,
         replayssm_beta=replayssm_beta,
-        replayssm_ring_indices=replayssm_ring_indices,
-        stride_ring_indices=(
-            replayssm_ring_indices.stride(0)
-            if replayssm_ring_indices is not None
-            else 0
-        ),
         stride_rawv_slot=stride_rawv_slot,
         stride_rawk_slot=stride_rawk_slot,
         stride_g_slot=stride_g_slot,

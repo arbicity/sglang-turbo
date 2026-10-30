@@ -493,6 +493,14 @@ class NGRAMWorker(BaseSpecWorker):
                 accept_lens,
                 accept_index,
                 self.draft_token_num,
+                native_replay_shape=(
+                    (
+                        self.model_runner.decode_cuda_graph_runner.bs,
+                        self.model_runner.decode_cuda_graph_runner.captured_req_width,
+                    )
+                    if can_run_cuda_graph
+                    else None
+                ),
             )
             accept_tokens = predict[accept_index]
             if (

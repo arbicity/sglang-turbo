@@ -2982,7 +2982,14 @@ class KVCacheConfigurator:
             replay_req_slots = (
                 get_schedule().max_running_requests // self.attn_dp_size + 1
             )
-            replayssm_fixed_bytes = replayssm_ring_per_req * replay_req_slots
+            replayssm_fixed_bytes = replayssm_ring_per_req * (replay_req_slots + 1)
+            if pp_layer_scale:
+                replayssm_fixed_bytes += (
+                    config.mamba2_cache_params.replayssm_shared_snapshot_bytes_per_req(
+                        record_len=record_len
+                    )
+                    * replay_req_slots
+                )
             replayssm_ring_per_slot = 0
         else:
             replayssm_fixed_bytes = 0

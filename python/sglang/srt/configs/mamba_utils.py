@@ -127,8 +127,9 @@ class BaseLinearStateParams(ABC):
     def replayssm_ring_bytes_per_req(self, record_len: int) -> int:
         """ReplaySSM spec-verify scratch bytes across all layers.
 
-        GDN keeps FP32 normalized-key/update/decay records. KDA keeps its
-        raw-input fold window and d/k rings.
+        GDN keeps raw q/k/v/a/b in FP32, preserving activation values for
+        native recomputation. Its shared snapshot workspace is charged
+        separately. KDA keeps its raw-input fold window and d/k rings.
         """
         hv, v_dim, k_dim = self.shape.temporal
         h_k = self.shape.num_k_heads_per_tp
@@ -144,13 +145,15 @@ class BaseLinearStateParams(ABC):
                 + h_k * record_len * k_dim * conv_b  # k
             )
         else:
-            per_layer = (
-                hv * record_len * v_dim * fp32_b  # rounded update
-                + h_k * record_len * k_dim * fp32_b  # normalized k
-                + hv * record_len * fp32_b  # scalar g
-                + hv * record_len * fp32_b  # beta (shared ring interface)
-            )
+            per_layer = (2 * h_k * k_dim + hv * v_dim + 2 * hv) * record_len * fp32_b
         return per_layer * len(self.layers)
+
+    def replayssm_shared_snapshot_bytes_per_req(self, record_len: int) -> int:
+        """One layer's snapshot window, reused across all local GDN layers."""
+        if self.is_kda:
+            return 0
+        hv, v_dim, k_dim = self.shape.temporal
+        return hv * v_dim * k_dim * record_len * self.dtype.temporal.itemsize
 
     @property
     def is_kda(self) -> bool:

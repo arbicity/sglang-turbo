@@ -949,6 +949,7 @@ def commit_mamba_states_after_verify(
     accept_index: torch.Tensor,
     draft_token_num: int,
     prepared_step_indices: Optional[Tuple[torch.Tensor, Optional[torch.Tensor]]] = None,
+    native_replay_shape: Optional[Tuple[int, int]] = None,
 ) -> None:
     """Commit accepted per-step mamba states into the persistent caches.
 
@@ -990,11 +991,10 @@ def commit_mamba_states_after_verify(
     ):
         if batch.forward_mode.is_idle() or accept_index.numel() == 0:
             return
-        from sglang.kernels.ops.attention.fla.gdn_replayssm_spec_fold import (
-            commit_gdn_replayssm_fold_after_verify,
+        from sglang.kernels.ops.attention.fla.gdn_replayssm_native import (
+            commit_native_after_verify,
         )
 
-        spec_state = req_pool.get_speculative_mamba2_params_all_layers()
         state_batch_indices = req_pool.get_mamba_indices(batch.req_pool_indices)
         if prepared_step_indices is None:
             last_correct_step_indices, mamba_steps_to_track = (
@@ -1007,10 +1007,11 @@ def commit_mamba_states_after_verify(
             )
         else:
             last_correct_step_indices, mamba_steps_to_track = prepared_step_indices
-        commit_gdn_replayssm_fold_after_verify(
-            spec_state=spec_state,
+        commit_native_after_verify(
+            pool=mamba_pool,
             state_batch_indices=state_batch_indices,
             record_indices=batch.req_pool_indices,
+            replay_shape=native_replay_shape,
             accept_lens=accept_lens,
             last_correct_step_indices=last_correct_step_indices,
             mamba_track_indices=batch.mamba_track_indices,

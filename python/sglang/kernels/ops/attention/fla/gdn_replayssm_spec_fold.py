@@ -23,7 +23,6 @@ def gdn_replayssm_exact_fold_kernel(
     g_cache,  # [num_slots, HV, RL]     fp32 scalar log-decay gate
     beta_cache,  # [num_slots, HV, RL]     fp32 beta
     ssm_state_indices,  # [B] int  physical slot per request
-    record_indices,  # [B] int request-lifetime record slot, separate from checkpoint
     accept_lens,  # [B] int  committed prefix length per request (incl. bonus)
     mamba_track_indices,  # [B] int  extra_buffer track slot (or NULL) per request
     mamba_steps_to_track,  # [B] int  crossing step (or -1) per request
@@ -38,7 +37,6 @@ def gdn_replayssm_exact_fold_kernel(
     stride_g_layer: tl.constexpr,
     stride_beta_layer: tl.constexpr,
     stride_indices: tl.constexpr,
-    stride_record_indices: tl.constexpr,
     stride_accept: tl.constexpr,
     stride_track: tl.constexpr,
     stride_steps: tl.constexpr,
@@ -52,7 +50,6 @@ def gdn_replayssm_exact_fold_kernel(
     USE_QK_L2NORM_IN_KERNEL: tl.constexpr,
     NULL_BLOCK_ID: tl.constexpr,
     HAS_TRACK: tl.constexpr,
-    ROUNDED_UPDATE: tl.constexpr,
 ):
     i_v = tl.program_id(0)
     i_n = tl.program_id(1)
@@ -69,9 +66,6 @@ def gdn_replayssm_exact_fold_kernel(
 
     state_idx = tl.load(ssm_state_indices + i_n * stride_indices).to(tl.int64)
     if state_idx <= NULL_BLOCK_ID:
-        return
-    record_idx = tl.load(record_indices + i_n * stride_record_indices).to(tl.int64)
-    if record_idx < 0:
         return
     n_commit = tl.load(accept_lens + i_n * stride_accept).to(tl.int32)
     if n_commit <= 0:
@@ -105,7 +99,7 @@ def gdn_replayssm_exact_fold_kernel(
         phys = t.to(tl.int64)
         b_k = tl.load(
             rawk_cache
-            + record_idx * stride_rawk_slot
+            + state_idx * stride_rawk_slot
             + (i_h * MAX_CACHE_LEN + phys) * K
             + o_k,
             mask=mask_k,
@@ -113,36 +107,25 @@ def gdn_replayssm_exact_fold_kernel(
         ).to(tl.float32)
         b_v = tl.load(
             rawv_cache
-            + record_idx * stride_rawv_slot
+            + state_idx * stride_rawv_slot
             + (i_hv * MAX_CACHE_LEN + phys) * V
             + o_v,
             mask=mask_v,
             other=0.0,
         ).to(tl.float32)
         b_g = tl.load(
-            g_cache + record_idx * stride_g_slot + i_hv * MAX_CACHE_LEN + phys
+            g_cache + state_idx * stride_g_slot + i_hv * MAX_CACHE_LEN + phys
         ).to(tl.float32)
         b_beta = tl.load(
-            beta_cache + record_idx * stride_beta_slot + i_hv * MAX_CACHE_LEN + phys
+            beta_cache + state_idx * stride_beta_slot + i_hv * MAX_CACHE_LEN + phys
         ).to(tl.float32)
 
-        if ROUNDED_UPDATE:
-            b_h = tl.inline_asm_elementwise(
-                "mul.rn.f32 $0, $1, $2;",
-                constraints="=f,f,f",
-                args=[b_h, b_g],
-                dtype=tl.float32,
-                is_pure=True,
-                pack=1,
-            )
-            b_h = tl.fma(b_k[:, None], b_v[None, :], b_h)
-        else:
-            if USE_QK_L2NORM_IN_KERNEL:
-                b_k = b_k / (tl.sqrt(tl.sum(b_k * b_k) + 1e-6))
-            b_h *= tl.exp(b_g)
-            b_v -= tl.sum(b_h * b_k[:, None], 0)
-            b_v *= b_beta
-            b_h += b_k[:, None] * b_v[None, :]
+        if USE_QK_L2NORM_IN_KERNEL:
+            b_k = b_k / (tl.sqrt(tl.sum(b_k * b_k) + 1e-6))
+        b_h *= tl.exp(b_g)
+        b_v -= tl.sum(b_h * b_k[:, None], 0)
+        b_v *= b_beta
+        b_h += b_k[:, None] * b_v[None, :]
 
         if HAS_TRACK:
             if (t == track_step) and (track_idx > NULL_BLOCK_ID):
@@ -173,23 +156,13 @@ def commit_gdn_replayssm_fold_all_layers(
     mamba_steps_to_track: torch.Tensor | None = None,
     use_qk_l2norm_in_kernel: bool = True,
     null_block_id: int = -1,
-    rounded_update: bool = False,
-    record_indices: torch.Tensor | None = None,
 ) -> None:
-    """Fold every layer's accepted window in one launch.
-
-    ``rounded_update`` consumes FP32 normalized-key/update/decay records.
-    The default retains the raw-input format used by CuTe DSL callers.
-    """
+    """Fold every layer's accepted window in one launch (layer packed into
+    grid axis 2); bit-identical to a per-layer loop."""
     num_layers, num_slots, HV = checkpoint_state.shape[:3]
-    if rounded_update:
-        if rawv_cache.dtype != torch.float32 or rawk_cache.dtype != torch.float32:
-            raise ValueError("Rounded GDN replay requires FP32 key and update records")
     K = rawk_cache.shape[-1]
     V = rawv_cache.shape[-1]
     B = ssm_state_indices.shape[0]
-    if record_indices is None:
-        record_indices = ssm_state_indices
     BK = triton.next_power_of_2(K)
     BV = min(triton.next_power_of_2(V), 32)
     grid = (triton.cdiv(V, BV), B, HV * num_layers)
@@ -212,7 +185,6 @@ def commit_gdn_replayssm_fold_all_layers(
         g_cache,
         beta_cache,
         ssm_state_indices,
-        record_indices,
         accept_lens,
         track_idx_t,
         steps_t,
@@ -227,7 +199,6 @@ def commit_gdn_replayssm_fold_all_layers(
         g_cache.stride(0),
         beta_cache.stride(0),
         ssm_state_indices.stride(0),
-        record_indices.stride(0),
         accept_lens.stride(0),
         stride_track,
         stride_steps,
@@ -241,7 +212,6 @@ def commit_gdn_replayssm_fold_all_layers(
         USE_QK_L2NORM_IN_KERNEL=use_qk_l2norm_in_kernel,
         NULL_BLOCK_ID=null_block_id,
         HAS_TRACK=has_track,
-        ROUNDED_UPDATE=rounded_update,
         num_warps=1,
         num_stages=3,
     )
@@ -257,7 +227,6 @@ def commit_gdn_replayssm_fold_after_verify(
     mamba_steps_to_track: torch.Tensor | None = None,
     src_indices_raw: torch.Tensor | None = None,
     null_block_id: int = -1,
-    record_indices: torch.Tensor | None = None,
 ) -> None:
     """Fold each layer's accepted window into ``temporal``, then do the usual
     conv accept-rollback (+ the track-slot conv scatter under extra_buffer)."""
@@ -280,8 +249,6 @@ def commit_gdn_replayssm_fold_after_verify(
         mamba_track_indices=mamba_track_indices,
         mamba_steps_to_track=mamba_steps_to_track,
         null_block_id=null_block_id,
-        rounded_update=True,
-        record_indices=record_indices,
     )
     for conv_states, interm_conv in zip(
         spec_state.conv, spec_state.intermediate_conv_window
