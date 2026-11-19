@@ -4,7 +4,7 @@ import unittest
 
 import torch
 
-from sglang.kernels.ops.attention.fla.gdn_replayssm_native import (
+from sglang.kernels.ops.attention.linear.gdn_replayssm_native import (
     capture_native_verify,
     commit_native_ssm,
 )

@@ -7,7 +7,7 @@ import sglang.srt
 from sglang.test.ci.ci_register import register_cpu_ci
 from sglang.test.test_utils import CustomTestCase
 
-register_cpu_ci(est_time=23, suite="base-a-test-cpu")
+register_cpu_ci(est_time=34, suite="base-a-test-cpu")
 
 
 class TestNgramMambaVerifyUpdate(CustomTestCase):
@@ -160,22 +160,22 @@ class TestPPReplaySSMVerifySourceRows(CustomTestCase):
         return spec_state
 
     def test_fold_helpers_read_pp_request_rows(self):
-        from sglang.kernels.ops.attention.fla.gdn_replayssm_spec_fold import (
+        from sglang.kernels.ops.attention.linear.gdn_replayssm_spec_fold import (
             commit_gdn_replayssm_fold_after_verify,
         )
-        from sglang.kernels.ops.attention.fla.kda_replayssm_spec_decode import (
+        from sglang.kernels.ops.attention.linear.kda_replayssm_spec_decode import (
             commit_kda_replayssm_after_verify,
         )
 
         cases = (
             (
                 commit_gdn_replayssm_fold_after_verify,
-                "sglang.kernels.ops.attention.fla.gdn_replayssm_spec_fold",
+                "sglang.kernels.ops.attention.linear.gdn_replayssm_spec_fold",
                 "commit_gdn_replayssm_fold_all_layers",
             ),
             (
                 commit_kda_replayssm_after_verify,
-                "sglang.kernels.ops.attention.fla.kda_replayssm_spec_decode",
+                "sglang.kernels.ops.attention.linear.kda_replayssm_spec_decode",
                 "commit_kda_replayssm_spec_all_layers",
             ),
         )
@@ -204,7 +204,7 @@ class TestPPReplaySSMVerifySourceRows(CustomTestCase):
         from types import SimpleNamespace
         from unittest.mock import patch
 
-        from sglang.kernels.ops.attention.fla.gdn_replayssm_native import (
+        from sglang.kernels.ops.attention.linear.gdn_replayssm_native import (
             commit_native_after_verify,
         )
 
@@ -213,7 +213,7 @@ class TestPPReplaySSMVerifySourceRows(CustomTestCase):
         source_rows = torch.tensor([3, 1])
         with (
             patch(
-                "sglang.kernels.ops.attention.fla.gdn_replayssm_native.commit_native_ssm"
+                "sglang.kernels.ops.attention.linear.gdn_replayssm_native.commit_native_ssm"
             ) as native,
             patch(
                 "sglang.kernels.ops.mamba.mamba_state_scatter_triton.fused_conv_window_scatter_with_mask"
@@ -265,11 +265,11 @@ class TestPPReplaySSMVerifySourceRows(CustomTestCase):
                 return_value=True,
             ),
             patch(
-                "sglang.kernels.ops.attention.fla.gdn_replayssm_spec_decode."
+                "sglang.kernels.ops.attention.linear.gdn_replayssm_spec_decode."
                 "commit_gdn_replayssm_spec"
             ),
             patch(
-                "sglang.kernels.ops.attention.fla.gdn_replayssm_spec_decode."
+                "sglang.kernels.ops.attention.linear.gdn_replayssm_spec_decode."
                 "commit_gdn_replayssm_circular"
             ),
             patch(
